@@ -2,8 +2,8 @@ node_modules/
 main.js
 *.map
 dist/
+release/
 .obsidian/
 .trash/
 .DS_Store
 npm-debug.log*
-
