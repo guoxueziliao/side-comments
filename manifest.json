@@ -1,0 +1,9 @@
+{
+  "id": "side-comments",
+  "name": "Side Comments",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Non-invasive side comments and reading annotations for Obsidian Markdown notes.",
+  "author": "FAN",
+  "isDesktopOnly": true
+}

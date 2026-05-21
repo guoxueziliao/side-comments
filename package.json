@@ -1,0 +1,29 @@
+{
+  "name": "side-comments",
+  "version": "0.1.0",
+  "description": "Non-invasive side comments and reading annotations for Obsidian Markdown notes.",
+  "main": "main.js",
+  "scripts": {
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "dev": "node esbuild.config.mjs",
+    "typecheck": "tsc -noEmit -skipLibCheck"
+  },
+  "keywords": [
+    "obsidian",
+    "plugin",
+    "annotations",
+    "comments",
+    "markdown"
+  ],
+  "author": "FAN",
+  "license": "MIT",
+  "devDependencies": {
+    "@codemirror/state": "^6.5.0",
+    "@codemirror/view": "^6.38.6",
+    "@types/node": "^24.0.0",
+    "builtin-modules": "^5.0.0",
+    "esbuild": "^0.27.0",
+    "obsidian": "^1.8.7",
+    "typescript": "^5.9.0"
+  }
+}

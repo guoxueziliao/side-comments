@@ -1,0 +1,236 @@
+.side-comments-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+}
+
+.side-comments-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.side-comments-title {
+  font-size: var(--font-ui-medium);
+  font-weight: 600;
+}
+
+.side-comments-subtitle {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.side-comments-toolbar-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.side-comments-toolbar-row input,
+.side-comments-toolbar-row select,
+.side-comments-card-edit-row select {
+  min-height: 28px;
+  font-size: var(--font-ui-smaller);
+}
+
+.side-comments-empty {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  line-height: 1.5;
+  padding: 10px 2px;
+}
+
+.side-comments-card {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 10px;
+  background: var(--background-primary);
+  transition: border-color 160ms ease, background-color 160ms ease, opacity 160ms ease;
+}
+
+.side-comments-card--flash {
+  border-color: var(--interactive-accent);
+  background: color-mix(in srgb, var(--interactive-accent) 8%, var(--background-primary));
+}
+
+.side-comments-card.is-resolved {
+  opacity: 0.72;
+}
+
+.side-comments-card.is-orphaned {
+  border-color: var(--text-error);
+  background: color-mix(in srgb, var(--text-error) 6%, var(--background-primary));
+}
+
+.side-comments-card-header {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.side-comments-card-meta {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  min-width: 0;
+}
+
+.side-comments-card-header-actions,
+.side-comments-card-edit-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.side-comments-card-button,
+.side-comments-toolbar-button {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  cursor: pointer;
+}
+
+.side-comments-toolbar-button-label {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.side-comments-card-button-label {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.side-comments-card-button:hover,
+.side-comments-toolbar-button:hover {
+  background: var(--background-modifier-hover);
+}
+
+.side-comments-card-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.side-comments-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.side-comments-card-body.is-collapsed {
+  max-height: 130px;
+  overflow: hidden;
+}
+
+.side-comments-card-section-title {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-weight: 600;
+}
+
+.side-comments-card-excerpt,
+.side-comments-card-note {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.side-comments-card.is-expanded .side-comments-card-excerpt,
+.side-comments-card.is-expanded .side-comments-card-note {
+  display: block;
+  overflow: visible;
+  -webkit-line-clamp: unset;
+}
+
+.side-comments-card-edit-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
+}
+
+.side-comments-card-textarea {
+  width: 100%;
+  min-height: 92px;
+  resize: vertical;
+  font-size: var(--font-ui-small);
+  line-height: 1.45;
+}
+
+.side-comments-toolbar {
+  position: absolute;
+  z-index: 1000;
+  gap: 4px;
+  align-items: center;
+  padding: 4px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-primary);
+  box-shadow: var(--shadow-s);
+}
+
+.side-comments-mark {
+  cursor: pointer;
+}
+
+.side-comments-mark--yellow {
+  --side-comments-mark-color: rgb(238, 194, 56);
+}
+
+.side-comments-mark--blue {
+  --side-comments-mark-color: rgb(79, 151, 231);
+}
+
+.side-comments-mark--red {
+  --side-comments-mark-color: rgb(220, 84, 78);
+}
+
+.side-comments-mark--green {
+  --side-comments-mark-color: rgb(76, 166, 107);
+}
+
+.side-comments-mark--purple {
+  --side-comments-mark-color: rgb(154, 111, 232);
+}
+
+.side-comments-mark--highlight {
+  background-color: color-mix(in srgb, var(--side-comments-mark-color, var(--text-highlight-bg)) 30%, transparent);
+  border-radius: 2px;
+}
+
+.side-comments-mark--underline {
+  text-decoration-line: underline;
+  text-decoration-color: var(--side-comments-mark-color, var(--interactive-accent));
+  text-decoration-thickness: 2px;
+  text-underline-offset: 2px;
+}
+
+.side-comments-mark--strikethrough {
+  opacity: 0.86;
+  text-decoration-line: line-through;
+  text-decoration-color: var(--side-comments-mark-color, var(--text-error));
+  text-decoration-thickness: 2px;
+}
+
+.side-comments-mark--resolved {
+  opacity: 0.55;
+}
+
+.side-comments-reading-view-mark {
+  cursor: pointer;
+}

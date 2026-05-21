@@ -1,0 +1,326 @@
+import { App, normalizePath } from "obsidian";
+import { createTextAnchor } from "../anchor/textAnchor";
+import { relocateComment } from "../anchor/relocate";
+import {
+  CURRENT_SCHEMA_VERSION,
+  type CommentCreateInput,
+  type CommentUpdateInput,
+  type PluginSettings,
+  type SideComment,
+  type SideCommentDocument,
+  type SideCommentsManifest
+} from "../types";
+import { createRecentPreview } from "./recentPreview";
+import { LruCache } from "./lruCache";
+import { migrateDocument, sortComments } from "./migration";
+import {
+  getBucketDir,
+  getManifestPath,
+  getRecentPreviewPath,
+  getSidecarPath,
+  hashVaultPath,
+  normalizeVaultRelativePath
+} from "./pathHash";
+
+export interface UpsertCommentResult {
+  document: SideCommentDocument;
+  comment: SideComment;
+  created: boolean;
+}
+
+export class SidecarStore {
+  private cache: LruCache<string, SideCommentDocument>;
+  private pluginVersion = "0.1.0";
+
+  constructor(private readonly app: App, private settings: PluginSettings) {
+    this.cache = new LruCache(settings.maxCachedDocuments);
+  }
+
+  updateSettings(settings: PluginSettings): void {
+    this.settings = settings;
+    this.cache.setMaxSize(settings.maxCachedDocuments);
+  }
+
+  async ensureManifest(pluginVersion: string): Promise<void> {
+    this.pluginVersion = pluginVersion;
+    await this.ensureFolder(this.settings.dataDir);
+    await this.writeManifest();
+  }
+
+  async loadDocument(filePath: string): Promise<SideCommentDocument> {
+    const normalizedPath = normalizeVaultRelativePath(filePath);
+    const cached = this.cache.get(normalizedPath);
+    if (cached) {
+      return cached;
+    }
+
+    const sidecarPath = await getSidecarPath(normalizedPath, this.settings.dataDir);
+    if (!(await this.app.vault.adapter.exists(sidecarPath))) {
+      const empty = await this.createEmptyDocument(normalizedPath);
+      this.cache.set(normalizedPath, empty);
+      return empty;
+    }
+
+    const raw = await this.app.vault.adapter.read(sidecarPath);
+    const parsed = JSON.parse(raw) as unknown;
+    const migrated = await migrateDocument(parsed, {
+      adapter: this.app.vault.adapter,
+      filePath: normalizedPath,
+      dataDir: this.settings.dataDir
+    });
+
+    const normalized: SideCommentDocument = {
+      ...migrated,
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      filePath: normalizedPath,
+      fileHash: await hashVaultPath(normalizedPath),
+      comments: sortComments(migrated.comments)
+    };
+
+    const parsedRecord = typeof parsed === "object" && parsed !== null ? parsed as Record<string, unknown> : {};
+    const needsWrite =
+      parsedRecord.schemaVersion !== CURRENT_SCHEMA_VERSION ||
+      parsedRecord.filePath !== normalized.filePath ||
+      parsedRecord.fileHash !== normalized.fileHash;
+
+    if (needsWrite) {
+      await this.saveDocument(normalized);
+    } else {
+      this.cache.set(normalizedPath, normalized);
+    }
+
+    return normalized;
+  }
+
+  async saveDocument(document: SideCommentDocument): Promise<SideCommentDocument> {
+    const normalizedPath = normalizeVaultRelativePath(document.filePath);
+    const hash = await hashVaultPath(normalizedPath);
+    const sidecarPath = await getSidecarPath(normalizedPath, this.settings.dataDir);
+    await this.ensureFolder(getBucketDir(hash, this.settings.dataDir));
+
+    const updated: SideCommentDocument = {
+      ...document,
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      filePath: normalizedPath,
+      fileHash: hash,
+      updatedAt: new Date().toISOString(),
+      comments: sortComments(document.comments)
+    };
+
+    await this.app.vault.adapter.write(sidecarPath, JSON.stringify(updated, null, 2));
+    this.cache.set(normalizedPath, updated);
+    await this.updateRecentPreviewCache(updated);
+    await this.writeManifest();
+    return updated;
+  }
+
+  async upsertComment(input: CommentCreateInput): Promise<UpsertCommentResult> {
+    const normalizedPath = normalizeVaultRelativePath(input.filePath);
+    const startOffset = Math.max(0, Math.min(input.startOffset, input.endOffset));
+    const endOffset = Math.max(startOffset, Math.max(input.startOffset, input.endOffset));
+    const anchor = createTextAnchor(input.sourceText, startOffset, endOffset);
+
+    if (anchor.selectedText.length === 0) {
+      throw new Error("Cannot create a side comment from an empty selection.");
+    }
+
+    const document = await this.loadDocument(normalizedPath);
+    const existing = document.comments.find(
+      (comment) => comment.anchor.startOffset === anchor.startOffset && comment.anchor.endOffset === anchor.endOffset
+    );
+
+    if (existing) {
+      return {
+        document,
+        comment: existing,
+        created: false
+      };
+    }
+
+    const now = new Date().toISOString();
+    const comment: SideComment = {
+      id: crypto.randomUUID(),
+      anchor,
+      mark: {
+        type: input.markType,
+        color: input.color
+      },
+      note: {
+        content: "",
+        createdAt: now,
+        updatedAt: now
+      },
+      status: "active"
+    };
+
+    const saved = await this.saveDocument({
+      ...document,
+      comments: [...document.comments, comment]
+    });
+
+    return {
+      document: saved,
+      comment,
+      created: true
+    };
+  }
+
+  async updateComment(filePath: string, commentId: string, input: CommentUpdateInput): Promise<SideCommentDocument> {
+    const document = await this.loadDocument(filePath);
+    let found = false;
+    const now = new Date().toISOString();
+    const comments = document.comments.map((comment) => {
+      if (comment.id !== commentId) {
+        return comment;
+      }
+
+      found = true;
+      return {
+        ...comment,
+        mark: {
+          type: input.markType ?? comment.mark.type,
+          color: input.color ?? comment.mark.color
+        },
+        note: {
+          ...comment.note,
+          content: input.noteContent ?? comment.note.content,
+          updatedAt: input.noteContent !== undefined ? now : comment.note.updatedAt
+        },
+        status: input.status ?? comment.status
+      };
+    });
+
+    if (!found) {
+      throw new Error(`Side comment not found: ${commentId}`);
+    }
+
+    return this.saveDocument({
+      ...document,
+      comments
+    });
+  }
+
+  async deleteComment(filePath: string, commentId: string): Promise<SideCommentDocument> {
+    const document = await this.loadDocument(filePath);
+    return this.saveDocument({
+      ...document,
+      comments: document.comments.filter((comment) => comment.id !== commentId)
+    });
+  }
+
+  async setCommentStatus(filePath: string, commentId: string, status: SideComment["status"]): Promise<SideCommentDocument> {
+    return this.updateComment(filePath, commentId, { status });
+  }
+
+  async relocateDocument(filePath: string, sourceText: string, existingDocument?: SideCommentDocument): Promise<SideCommentDocument> {
+    const document = existingDocument ?? await this.loadDocument(filePath);
+    if (document.comments.length === 0) {
+      return document;
+    }
+
+    const relocatedComments = document.comments.map((comment) => relocateComment(sourceText, comment));
+    const changed = relocatedComments.some((comment, index) => {
+      const previous = document.comments[index];
+      return (
+        comment.status !== previous.status ||
+        comment.anchor.startOffset !== previous.anchor.startOffset ||
+        comment.anchor.endOffset !== previous.anchor.endOffset
+      );
+    });
+
+    if (!changed) {
+      return document;
+    }
+
+    return this.saveDocument({
+      ...document,
+      comments: relocatedComments
+    });
+  }
+
+  async migrateRenamedFile(oldPath: string, newPath: string): Promise<SideCommentDocument | null> {
+    const normalizedOld = normalizeVaultRelativePath(oldPath);
+    const normalizedNew = normalizeVaultRelativePath(newPath);
+    const oldSidecarPath = await getSidecarPath(normalizedOld, this.settings.dataDir);
+    const newSidecarPath = await getSidecarPath(normalizedNew, this.settings.dataDir);
+
+    if (!(await this.app.vault.adapter.exists(oldSidecarPath))) {
+      return null;
+    }
+
+    const document = await this.loadDocument(normalizedOld);
+    const updated = await this.saveDocument({
+      ...document,
+      filePath: normalizedNew,
+      fileHash: await hashVaultPath(normalizedNew)
+    });
+
+    if (oldSidecarPath !== newSidecarPath) {
+      await this.app.vault.adapter.remove(oldSidecarPath);
+    }
+    this.cache.delete(normalizedOld);
+    return updated;
+  }
+
+  getCachedDocument(filePath: string): SideCommentDocument | undefined {
+    return this.cache.get(normalizeVaultRelativePath(filePath));
+  }
+
+  private async createEmptyDocument(filePath: string): Promise<SideCommentDocument> {
+    return {
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      filePath,
+      fileHash: await hashVaultPath(filePath),
+      updatedAt: new Date().toISOString(),
+      comments: []
+    };
+  }
+
+  private async writeManifest(): Promise<void> {
+    const manifestPath = getManifestPath(this.settings.dataDir);
+    const manifest: SideCommentsManifest = {
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      pluginVersion: this.pluginVersion,
+      updatedAt: new Date().toISOString()
+    };
+    await this.ensureFolder(this.settings.dataDir);
+    await this.app.vault.adapter.write(manifestPath, JSON.stringify(manifest, null, 2));
+  }
+
+  private async updateRecentPreviewCache(document: SideCommentDocument): Promise<void> {
+    const recentPath = getRecentPreviewPath(this.settings.dataDir);
+    const recentDir = recentPath.slice(0, recentPath.lastIndexOf("/"));
+    await this.ensureFolder(recentDir);
+
+    let items: unknown[] = [];
+    if (await this.app.vault.adapter.exists(recentPath)) {
+      try {
+        const raw = await this.app.vault.adapter.read(recentPath);
+        const parsed = JSON.parse(raw);
+        items = Array.isArray(parsed) ? parsed : [];
+      } catch {
+        items = [];
+      }
+    }
+
+    const preview = createRecentPreview(document);
+    const next = [
+      preview,
+      ...items.filter((item) => typeof item === "object" && item !== null && (item as { filePath?: string }).filePath !== document.filePath)
+    ].slice(0, 100);
+
+    await this.app.vault.adapter.write(recentPath, JSON.stringify(next, null, 2));
+  }
+
+  private async ensureFolder(folderPath: string): Promise<void> {
+    const parts = normalizePath(folderPath).split("/");
+    let current = "";
+
+    for (const part of parts) {
+      current = current ? `${current}/${part}` : part;
+      if (!(await this.app.vault.adapter.exists(current))) {
+        await this.app.vault.adapter.mkdir(current);
+      }
+    }
+  }
+}
