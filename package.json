@@ -1,7 +1,7 @@
 {
   "name": "side-comments",
-  "version": "0.1.0",
-  "description": "Non-invasive side comments and reading annotations for Obsidian Markdown notes.",
+  "version": "0.1.1",
+  "description": "Non-invasive side comments and reading annotations for Markdown notes.",
   "main": "main.js",
   "scripts": {
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",

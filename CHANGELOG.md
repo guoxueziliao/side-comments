@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.1
+
+- Updated the plugin description to comply with community directory validation rules.
+
 ## 0.1.0
 
 - Added non-invasive sidecar storage under `.obsidian-side-comments/`.
