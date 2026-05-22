@@ -7,6 +7,7 @@ export type SideCommentStatus = "active" | "resolved" | "orphaned";
 export type MarkFilter = "all" | MarkType;
 export type StatusFilter = "all" | SideCommentStatus;
 export type SelectionAction = "highlight" | "underline" | "strikethrough" | "comment";
+export type AnchorSourceMode = "source" | "reading";
 
 export interface TextAnchor {
   startOffset: number;
@@ -14,6 +15,25 @@ export interface TextAnchor {
   selectedText: string;
   prefix: string;
   suffix: string;
+  version?: 2;
+  context?: {
+    before: string;
+    after: string;
+    normalizedBefore: string;
+    normalizedSelectedText: string;
+    normalizedAfter: string;
+  };
+  position?: {
+    lineStart: number;
+    lineEnd: number;
+    columnStart: number;
+    columnEnd: number;
+  };
+  source?: {
+    mode: AnchorSourceMode;
+    createdAt: string;
+    updatedAt: string;
+  };
 }
 
 export interface SideComment {
@@ -67,6 +87,7 @@ export interface CommentCreateInput {
   endOffset: number;
   markType: MarkType;
   color: MarkColor;
+  sourceMode: AnchorSourceMode;
 }
 
 export interface CommentUpdateInput {

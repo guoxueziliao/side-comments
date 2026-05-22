@@ -18,7 +18,7 @@ import { SideCommentsSettingTab } from "./src/settings/settingsTab";
 import { SidecarStore } from "./src/storage/sidecarStore";
 import { normalizeVaultRelativePath } from "./src/storage/pathHash";
 import { SideCommentsSidebarView, SIDE_COMMENTS_VIEW_TYPE } from "./src/views/sidebarView";
-import type { CommentUpdateInput, PluginSettings, SideComment, SideCommentDocument } from "./src/types";
+import type { AnchorSourceMode, CommentUpdateInput, PluginSettings, SideComment, SideCommentDocument } from "./src/types";
 
 type CurrentDocumentLoadState = "none" | "ready" | "failed";
 
@@ -173,7 +173,8 @@ export default class SideCommentsPlugin extends Plugin {
       view.state.doc.toString(),
       selection.from,
       selection.to,
-      action
+      action,
+      "source"
     );
   }
 
@@ -190,7 +191,7 @@ export default class SideCommentsPlugin extends Plugin {
 
     const startOffset = editor.posToOffset(editor.getCursor("from"));
     const endOffset = editor.posToOffset(editor.getCursor("to"));
-    await this.createAnnotationFromOffsets(file.path, editor.getValue(), startOffset, endOffset, action);
+    await this.createAnnotationFromOffsets(file.path, editor.getValue(), startOffset, endOffset, action, "source");
   }
 
   private async handleSelectionAction(action: SelectionToolbarAction): Promise<void> {
@@ -223,7 +224,7 @@ export default class SideCommentsPlugin extends Plugin {
       return;
     }
 
-    await this.createAnnotationFromOffsets(view.file.path, sourceText, match.startOffset, match.endOffset, action);
+    await this.createAnnotationFromOffsets(view.file.path, sourceText, match.startOffset, match.endOffset, action, "reading");
   }
 
   private syncSelectionToolbar(): void {
@@ -299,12 +300,102 @@ export default class SideCommentsPlugin extends Plugin {
     return rect;
   }
 
+  private getCurrentMarkdownSelection(action: "bind" | "adjust"): {
+    sourceText: string;
+    startOffset: number;
+    endOffset: number;
+    sourceMode: AnchorSourceMode;
+  } | null {
+    const document = this.requireCurrentDocument();
+    const view = this.findMarkdownViewForPath(document.filePath);
+    const noSelectionMessage = action === "bind" ? "请先在当前文档中选中要绑定的文字" : "请先在当前文档中选中要调整的文字";
+    const unsupportedMessage = action === "bind" ? "当前选区暂不支持绑定" : "当前选区暂不支持调整";
+
+    if (!view?.file || normalizeVaultRelativePath(view.file.path) !== document.filePath) {
+      new Notice(noSelectionMessage);
+      return null;
+    }
+
+    if (view.getMode() === "source") {
+      if (!view.editor.somethingSelected()) {
+        new Notice(noSelectionMessage);
+        return null;
+      }
+
+      const startOffset = view.editor.posToOffset(view.editor.getCursor("from"));
+      const endOffset = view.editor.posToOffset(view.editor.getCursor("to"));
+      if (startOffset === endOffset) {
+        new Notice(noSelectionMessage);
+        return null;
+      }
+
+      return {
+        sourceText: view.editor.getValue(),
+        startOffset,
+        endOffset,
+        sourceMode: "source"
+      };
+    }
+
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0 || !selection.toString().trim()) {
+      new Notice(noSelectionMessage);
+      return null;
+    }
+
+    const range = selection.getRangeAt(0);
+    const previewRoot = view.previewMode.containerEl;
+    if (!previewRoot.contains(range.commonAncestorContainer)) {
+      new Notice(unsupportedMessage);
+      return null;
+    }
+
+    const sourceText = view.getViewData();
+    const preferredIndex = getTextOffsetInContainer(previewRoot, range);
+    const match = findSelectedTextInSource(sourceText, selection.toString(), {
+      preferredStartOffset: preferredIndex ?? undefined,
+      preferNormalized: true
+    });
+    if (!match) {
+      new Notice(unsupportedMessage);
+      return null;
+    }
+
+    return {
+      sourceText,
+      startOffset: match.startOffset,
+      endOffset: match.endOffset,
+      sourceMode: "reading"
+    };
+  }
+
+  private findMarkdownViewForPath(filePath: string): MarkdownView | null {
+    const active = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (active?.file && normalizeVaultRelativePath(active.file.path) === filePath) {
+      return active;
+    }
+
+    let match: MarkdownView | null = null;
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      if (match || !(leaf.view instanceof MarkdownView) || !leaf.view.file) {
+        return;
+      }
+
+      if (normalizeVaultRelativePath(leaf.view.file.path) === filePath) {
+        match = leaf.view;
+      }
+    });
+
+    return match;
+  }
+
   async createAnnotationFromOffsets(
     filePath: string,
     sourceText: string,
     startOffset: number,
     endOffset: number,
-    action: SelectionToolbarAction
+    action: SelectionToolbarAction,
+    sourceMode: "source" | "reading"
   ): Promise<void> {
     try {
       const result = await this.store.upsertComment({
@@ -313,7 +404,8 @@ export default class SideCommentsPlugin extends Plugin {
         startOffset,
         endOffset,
         markType: action.type,
-        color: action.color
+        color: action.color,
+        sourceMode
       });
 
       this.currentDocument = result.document;
@@ -342,6 +434,63 @@ export default class SideCommentsPlugin extends Plugin {
   async deleteComment(commentId: string): Promise<SideCommentDocument> {
     const document = this.requireCurrentDocument();
     return this.store.deleteComment(document.filePath, commentId);
+  }
+
+  async rebindOrphanedCommentToSelection(commentId: string): Promise<SideCommentDocument | null> {
+    const document = this.requireCurrentDocument();
+    const comment = document.comments.find((item) => item.id === commentId);
+    if (!comment || comment.status !== "orphaned") {
+      return null;
+    }
+
+    const selection = this.getCurrentMarkdownSelection("bind");
+    if (!selection) {
+      return null;
+    }
+
+    try {
+      return await this.store.updateCommentAnchor(
+        document.filePath,
+        commentId,
+        selection.sourceText,
+        selection.startOffset,
+        selection.endOffset,
+        selection.sourceMode,
+        "active"
+      );
+    } catch (error) {
+      console.error("Side Comments failed to rebind comment", error);
+      new Notice("当前选区暂不支持绑定");
+      return null;
+    }
+  }
+
+  async adjustCommentRangeToSelection(commentId: string): Promise<SideCommentDocument | null> {
+    const document = this.requireCurrentDocument();
+    const comment = document.comments.find((item) => item.id === commentId);
+    if (!comment || comment.status === "orphaned") {
+      return null;
+    }
+
+    const selection = this.getCurrentMarkdownSelection("adjust");
+    if (!selection) {
+      return null;
+    }
+
+    try {
+      return await this.store.updateCommentAnchor(
+        document.filePath,
+        commentId,
+        selection.sourceText,
+        selection.startOffset,
+        selection.endOffset,
+        selection.sourceMode
+      );
+    } catch (error) {
+      console.error("Side Comments failed to adjust comment range", error);
+      new Notice("当前选区暂不支持调整");
+      return null;
+    }
   }
 
   async focusCommentInSidebar(commentId: string, edit = false): Promise<void> {
@@ -471,8 +620,32 @@ export default class SideCommentsPlugin extends Plugin {
   }
 }
 
-function findSelectedTextInSource(sourceText: string, selectedText: string): { startOffset: number; endOffset: number } | null {
-  const exactStart = sourceText.indexOf(selectedText);
+interface SourceMatchOptions {
+  preferredStartOffset?: number;
+  preferNormalized?: boolean;
+}
+
+function findSelectedTextInSource(
+  sourceText: string,
+  selectedText: string,
+  options: SourceMatchOptions = {}
+): { startOffset: number; endOffset: number } | null {
+  if (!options.preferNormalized) {
+    const exactStart = findClosestTextMatch(sourceText, selectedText, options.preferredStartOffset);
+    if (exactStart >= 0) {
+      return {
+        startOffset: exactStart,
+        endOffset: exactStart + selectedText.length
+      };
+    }
+  }
+
+  const normalized = findNormalizedSelectedTextInSource(sourceText, selectedText, options.preferredStartOffset);
+  if (normalized) {
+    return normalized;
+  }
+
+  const exactStart = findClosestTextMatch(sourceText, selectedText, options.preferredStartOffset);
   if (exactStart >= 0) {
     return {
       startOffset: exactStart,
@@ -480,13 +653,22 @@ function findSelectedTextInSource(sourceText: string, selectedText: string): { s
     };
   }
 
+  return null;
+}
+
+function findNormalizedSelectedTextInSource(
+  sourceText: string,
+  selectedText: string,
+  preferredStartOffset?: number
+): { startOffset: number; endOffset: number } | null {
   const sourceNormalized = normalizeTextForPreviewMatch(sourceText);
   const selectedNormalized = normalizeTextForPreviewMatch(selectedText);
   if (!selectedNormalized.text) {
     return null;
   }
 
-  const normalizedStart = sourceNormalized.text.indexOf(selectedNormalized.text);
+  const normalizedPreferredStart = getNormalizedPreferredOffset(sourceNormalized.offsets, preferredStartOffset);
+  const normalizedStart = findClosestTextMatch(sourceNormalized.text, selectedNormalized.text, normalizedPreferredStart);
   if (normalizedStart < 0) {
     return null;
   }
@@ -502,6 +684,55 @@ function findSelectedTextInSource(sourceText: string, selectedText: string): { s
     startOffset,
     endOffset
   };
+}
+
+function findClosestTextMatch(source: string, target: string, preferredStartOffset?: number): number {
+  if (!target) {
+    return -1;
+  }
+
+  if (preferredStartOffset === undefined) {
+    return source.indexOf(target);
+  }
+
+  let bestIndex = -1;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  let searchFrom = 0;
+
+  while (searchFrom <= source.length) {
+    const index = source.indexOf(target, searchFrom);
+    if (index < 0) {
+      break;
+    }
+
+    const distance = Math.abs(index - preferredStartOffset);
+    if (distance < bestDistance) {
+      bestIndex = index;
+      bestDistance = distance;
+    }
+
+    searchFrom = index + Math.max(1, target.length);
+  }
+
+  return bestIndex;
+}
+
+function getNormalizedPreferredOffset(offsets: number[], preferredStartOffset?: number): number | undefined {
+  if (preferredStartOffset === undefined) {
+    return undefined;
+  }
+
+  let closestIndex: number | undefined;
+  let closestDistance = Number.POSITIVE_INFINITY;
+  for (let index = 0; index < offsets.length; index += 1) {
+    const distance = Math.abs(offsets[index] - preferredStartOffset);
+    if (distance < closestDistance) {
+      closestIndex = index;
+      closestDistance = distance;
+    }
+  }
+
+  return closestIndex;
 }
 
 function normalizeTextForPreviewMatch(value: string): { text: string; offsets: number[] } {
@@ -537,4 +768,24 @@ function normalizeTextForPreviewMatch(value: string): { text: string; offsets: n
 
 function isMarkdownFormattingChar(char: string): boolean {
   return char === "*" || char === "_" || char === "~" || char === "`" || char === "#" || char === ">" || char === "[" || char === "]" || char === "(" || char === ")" || char === "!";
+}
+
+function getTextOffsetInContainer(container: HTMLElement, range: Range): number | null {
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  let offset = 0;
+
+  while (walker.nextNode()) {
+    const node = walker.currentNode as Text;
+    if (node === range.startContainer) {
+      return offset + range.startOffset;
+    }
+
+    if (node.contains(range.startContainer)) {
+      return offset;
+    }
+
+    offset += node.nodeValue?.length ?? 0;
+  }
+
+  return null;
 }

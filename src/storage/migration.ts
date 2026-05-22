@@ -90,7 +90,11 @@ function normalizeComment(comment: unknown): SideComment {
       endOffset: typeof anchor.endOffset === "number" ? anchor.endOffset : 0,
       selectedText: typeof anchor.selectedText === "string" ? anchor.selectedText : "",
       prefix: typeof anchor.prefix === "string" ? anchor.prefix : "",
-      suffix: typeof anchor.suffix === "string" ? anchor.suffix : ""
+      suffix: typeof anchor.suffix === "string" ? anchor.suffix : "",
+      version: anchor.version === 2 ? 2 : undefined,
+      context: normalizeAnchorContext(anchor.context),
+      position: normalizeAnchorPosition(anchor.position),
+      source: normalizeAnchorSource(anchor.source)
     },
     mark: {
       type: isMarkType(mark.type) ? mark.type : "highlight",
@@ -102,6 +106,63 @@ function normalizeComment(comment: unknown): SideComment {
       updatedAt: typeof note.updatedAt === "string" ? note.updatedAt : new Date().toISOString()
     },
     status: isStatus(raw.status) ? raw.status : "active"
+  };
+}
+
+function normalizeAnchorContext(value: unknown): SideComment["anchor"]["context"] {
+  const raw = isRecord(value) ? value : {};
+  if (
+    typeof raw.before !== "string" ||
+    typeof raw.after !== "string" ||
+    typeof raw.normalizedBefore !== "string" ||
+    typeof raw.normalizedSelectedText !== "string" ||
+    typeof raw.normalizedAfter !== "string"
+  ) {
+    return undefined;
+  }
+
+  return {
+    before: raw.before,
+    after: raw.after,
+    normalizedBefore: raw.normalizedBefore,
+    normalizedSelectedText: raw.normalizedSelectedText,
+    normalizedAfter: raw.normalizedAfter
+  };
+}
+
+function normalizeAnchorPosition(value: unknown): SideComment["anchor"]["position"] {
+  const raw = isRecord(value) ? value : {};
+  if (
+    typeof raw.lineStart !== "number" ||
+    typeof raw.lineEnd !== "number" ||
+    typeof raw.columnStart !== "number" ||
+    typeof raw.columnEnd !== "number"
+  ) {
+    return undefined;
+  }
+
+  return {
+    lineStart: raw.lineStart,
+    lineEnd: raw.lineEnd,
+    columnStart: raw.columnStart,
+    columnEnd: raw.columnEnd
+  };
+}
+
+function normalizeAnchorSource(value: unknown): SideComment["anchor"]["source"] {
+  const raw = isRecord(value) ? value : {};
+  if (
+    (raw.mode !== "source" && raw.mode !== "reading") ||
+    typeof raw.createdAt !== "string" ||
+    typeof raw.updatedAt !== "string"
+  ) {
+    return undefined;
+  }
+
+  return {
+    mode: raw.mode,
+    createdAt: raw.createdAt,
+    updatedAt: raw.updatedAt
   };
 }
 

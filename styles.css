@@ -140,7 +140,8 @@
 }
 
 .side-comments-card-excerpt,
-.side-comments-card-note {
+.side-comments-card-note,
+.side-comments-card-context {
   display: -webkit-box;
   overflow: hidden;
   color: var(--text-normal);
@@ -152,10 +153,18 @@
 }
 
 .side-comments-card.is-expanded .side-comments-card-excerpt,
-.side-comments-card.is-expanded .side-comments-card-note {
+.side-comments-card.is-expanded .side-comments-card-note,
+.side-comments-card.is-expanded .side-comments-card-context {
   display: block;
   overflow: visible;
   -webkit-line-clamp: unset;
+}
+
+.side-comments-card-context {
+  color: var(--text-muted);
+  background: var(--background-secondary);
+  border-radius: 4px;
+  padding: 6px;
 }
 
 .side-comments-card-edit-row {

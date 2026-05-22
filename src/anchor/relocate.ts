@@ -1,5 +1,6 @@
 import type { SideComment, TextAnchor } from "../types";
 import { findBestFuzzyMatch } from "./fuzzyMatch";
+import { refreshAnchorMetadata } from "./textAnchor";
 
 const CONTEXT_THRESHOLD = 0.75;
 const FUZZY_THRESHOLD = 0.85;
@@ -36,11 +37,11 @@ export function relocateAnchor(source: string, anchor: TextAnchor): TextAnchor |
 
   const fuzzy = findBestFuzzyMatch(source, anchor.selectedText);
   if (fuzzy && fuzzy.confidence >= FUZZY_THRESHOLD) {
-    return {
+    return refreshAnchorMetadata(source, {
       ...anchor,
       startOffset: fuzzy.startOffset,
       endOffset: fuzzy.endOffset
-    };
+    });
   }
 
   return null;
@@ -61,11 +62,11 @@ function findByContext(source: string, anchor: TextAnchor): TextAnchor | null {
     const score = (similarity(prefix, anchor.prefix) + similarity(suffix, anchor.suffix)) / 2;
 
     if (score >= CONTEXT_THRESHOLD) {
-      return {
+      return refreshAnchorMetadata(source, {
         ...anchor,
         startOffset: index,
         endOffset: end
-      };
+      });
     }
 
     searchFrom = end;

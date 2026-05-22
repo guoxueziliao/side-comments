@@ -2,6 +2,7 @@ import { App, normalizePath } from "obsidian";
 import { createTextAnchor } from "../anchor/textAnchor";
 import { relocateComment } from "../anchor/relocate";
 import {
+  type AnchorSourceMode,
   CURRENT_SCHEMA_VERSION,
   type CommentCreateInput,
   type CommentUpdateInput,
@@ -118,7 +119,7 @@ export class SidecarStore {
     const normalizedPath = normalizeVaultRelativePath(input.filePath);
     const startOffset = Math.max(0, Math.min(input.startOffset, input.endOffset));
     const endOffset = Math.max(startOffset, Math.max(input.startOffset, input.endOffset));
-    const anchor = createTextAnchor(input.sourceText, startOffset, endOffset);
+    const anchor = createTextAnchor(input.sourceText, startOffset, endOffset, input.sourceMode);
 
     if (anchor.selectedText.length === 0) {
       throw new Error("Cannot create a side comment from an empty selection.");
@@ -212,6 +213,48 @@ export class SidecarStore {
     return this.updateComment(filePath, commentId, { status });
   }
 
+  async updateCommentAnchor(
+    filePath: string,
+    commentId: string,
+    sourceText: string,
+    startOffset: number,
+    endOffset: number,
+    sourceMode: AnchorSourceMode,
+    nextStatus?: SideComment["status"]
+  ): Promise<SideCommentDocument> {
+    const document = await this.loadDocument(filePath);
+    const normalizedStart = Math.max(0, Math.min(startOffset, endOffset));
+    const normalizedEnd = Math.max(normalizedStart, Math.max(startOffset, endOffset));
+    const anchor = createTextAnchor(sourceText, normalizedStart, normalizedEnd, sourceMode);
+
+    if (anchor.selectedText.length === 0) {
+      throw new Error("Cannot update a side comment anchor from an empty selection.");
+    }
+
+    let found = false;
+    const comments = document.comments.map((comment) => {
+      if (comment.id !== commentId) {
+        return comment;
+      }
+
+      found = true;
+      return {
+        ...comment,
+        anchor,
+        status: nextStatus ?? comment.status
+      };
+    });
+
+    if (!found) {
+      throw new Error(`Side comment not found: ${commentId}`);
+    }
+
+    return this.saveDocument({
+      ...document,
+      comments
+    });
+  }
+
   async relocateDocument(filePath: string, sourceText: string, existingDocument?: SideCommentDocument): Promise<SideCommentDocument> {
     const document = existingDocument ?? await this.loadDocument(filePath);
     if (document.comments.length === 0) {
@@ -224,7 +267,8 @@ export class SidecarStore {
       return (
         comment.status !== previous.status ||
         comment.anchor.startOffset !== previous.anchor.startOffset ||
-        comment.anchor.endOffset !== previous.anchor.endOffset
+        comment.anchor.endOffset !== previous.anchor.endOffset ||
+        comment.anchor.source?.updatedAt !== previous.anchor.source?.updatedAt
       );
     });
 

@@ -145,6 +145,28 @@ export class SideCommentsSidebarView extends ItemView {
     this.focusComment(commentId, false);
   }
 
+  async rebindComment(commentId: string): Promise<void> {
+    const updated = await this.plugin.rebindOrphanedCommentToSelection(commentId);
+    if (!updated) {
+      return;
+    }
+
+    this.plugin.setCurrentDocument(updated);
+    this.plugin.refreshAllViews();
+    this.focusComment(commentId, false);
+  }
+
+  async adjustCommentRange(commentId: string): Promise<void> {
+    const updated = await this.plugin.adjustCommentRangeToSelection(commentId);
+    if (!updated) {
+      return;
+    }
+
+    this.plugin.setCurrentDocument(updated);
+    this.plugin.refreshAllViews();
+    this.focusComment(commentId, false);
+  }
+
   async render(): Promise<void> {
     const content = this.getContentEl();
     content.empty();
@@ -256,6 +278,12 @@ export class SideCommentsSidebarView extends ItemView {
         },
         onJump: (commentId) => {
           void this.jumpToComment(commentId);
+        },
+        onRebind: (commentId) => {
+          void this.rebindComment(commentId);
+        },
+        onAdjustRange: (commentId) => {
+          void this.adjustCommentRange(commentId);
         },
         onDraftChange: (commentId, draft) => {
           this.updateDraft(commentId, draft);

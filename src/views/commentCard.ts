@@ -12,6 +12,8 @@ export interface CommentCardContext {
   onDelete: (commentId: string) => void;
   onToggleStatus: (commentId: string, status: SideCommentStatus) => void;
   onJump: (commentId: string) => void;
+  onRebind: (commentId: string) => void;
+  onAdjustRange: (commentId: string) => void;
   onDraftChange: (commentId: string, draft: CommentDraft) => void;
 }
 
@@ -43,6 +45,15 @@ export function renderCommentCard(
   createActionButton(headerActions, "跳", "跳回原文", () => {
     context.onJump(comment.id);
   });
+  if (comment.status === "orphaned") {
+    createActionButton(headerActions, "绑", "重新绑定到当前选区", () => {
+      context.onRebind(comment.id);
+    });
+  } else {
+    createActionButton(headerActions, "调", "调整到当前选区", () => {
+      context.onAdjustRange(comment.id);
+    });
+  }
   createActionButton(headerActions, context.editing ? "存" : "编", context.editing ? "保存" : "编辑", () => {
     if (context.editing) {
       context.onSave(comment.id, context.draft);
@@ -71,6 +82,14 @@ export function renderCommentCard(
     text: comment.anchor.selectedText || "(empty selection)"
   });
 
+  if (comment.status === "orphaned") {
+    body.createDiv({ cls: "side-comments-card-section-title", text: "上下文" });
+    body.createDiv({
+      cls: "side-comments-card-context",
+      text: buildAnchorContextPreview(comment)
+    });
+  }
+
   body.createDiv({ cls: "side-comments-card-section-title", text: "批注" });
   if (context.editing) {
     renderEditFields(body, comment, context);
@@ -89,6 +108,12 @@ export function renderCommentCard(
   }
 
   return card;
+}
+
+function buildAnchorContextPreview(comment: SideComment): string {
+  const before = comment.anchor.context?.before ?? comment.anchor.prefix;
+  const after = comment.anchor.context?.after ?? comment.anchor.suffix;
+  return `${before}[${comment.anchor.selectedText}]${after}`.trim() || comment.anchor.selectedText;
 }
 
 function renderEditFields(container: HTMLElement, comment: SideComment, context: CommentCardContext): void {
@@ -210,6 +235,10 @@ function createActionButton(
   });
   button.createSpan({ cls: "side-comments-card-button-label", text: shortLabel });
   button.disabled = disabled;
+  button.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  });
   button.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
