@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0
+
+- Added richer anchor metadata for new and refreshed comments.
+- Added orphaned comment rebind from the current selection.
+- Added range adjustment for active and resolved comments.
+- Added orphaned-card context display.
+- Improved reading-mode selection mapping for repeated text.
+
 ## 0.1.1
 
 - Updated the plugin description to comply with community directory validation rules.

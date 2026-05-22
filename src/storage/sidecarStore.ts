@@ -31,7 +31,7 @@ export interface UpsertCommentResult {
 
 export class SidecarStore {
   private cache: LruCache<string, SideCommentDocument>;
-  private pluginVersion = "0.1.0";
+  private pluginVersion = "0.2.0";
 
   constructor(private readonly app: App, private settings: PluginSettings) {
     this.cache = new LruCache(settings.maxCachedDocuments);

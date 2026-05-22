@@ -7,6 +7,7 @@ This document records decisions already agreed for `v0.2`. It should be used as 
 ## Version Direction
 
 - `v0.2` focuses on anchor reliability.
+- The development version for this stage is `0.2.0`.
 - Main work: safer relocation, orphaned comment rebind, manual range adjustment, and source/reading mode selection mapping.
 - Official review fixes still take priority if they appear.
 
