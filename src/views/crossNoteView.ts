@@ -1,7 +1,13 @@
 import { ItemView, WorkspaceLeaf } from "obsidian";
 import type SideCommentsPlugin from "../../main";
-import type { MarkColor, MarkFilter, MarkType, RecentPreviewItem, SideCommentStatus } from "../types";
+import type { AnnotationType, MarkColor, MarkType, RecentPreviewItem, SideComment, SideCommentStatus } from "../types";
 import { colorLabel, markLabel, statusLabel } from "./commentCard";
+import {
+  ANNOTATION_TYPES,
+  annotationTypeLabel,
+  normalizeTagKey,
+  normalizeTags
+} from "../organization/annotationMetadata";
 
 export const SIDE_COMMENTS_CROSS_NOTE_VIEW_TYPE = "side-comments-cross-note-view";
 
@@ -16,6 +22,8 @@ interface CrossNoteResult {
   markType: MarkType;
   color: MarkColor;
   status: SideCommentStatus;
+  annotationType: AnnotationType;
+  tags: string[];
   updatedAt: string;
 }
 
@@ -26,7 +34,8 @@ export class SideCommentsCrossNoteView extends ItemView {
   private sourceFilter = "";
   private statusFilter: SideCommentStatus | "all" = "all";
   private colorFilter: MarkColor | "all" = "all";
-  private typeFilter: MarkFilter = "all";
+  private readonly annotationTypeFilters = new Set<AnnotationType>();
+  private readonly tagFilters = new Set<string>();
 
   constructor(leaf: WorkspaceLeaf, private readonly plugin: SideCommentsPlugin) {
     super(leaf);
@@ -78,17 +87,13 @@ export class SideCommentsCrossNoteView extends ItemView {
     void this.render();
   }
 
-  setTypeFilter(value: MarkFilter): void {
-    this.typeFilter = value;
-    void this.render();
-  }
-
   clearFilters(): void {
     this.searchQuery = "";
     this.sourceFilter = "";
     this.statusFilter = "all";
     this.colorFilter = "all";
-    this.typeFilter = "all";
+    this.annotationTypeFilters.clear();
+    this.tagFilters.clear();
     void this.render();
   }
 
@@ -128,20 +133,6 @@ export class SideCommentsCrossNoteView extends ItemView {
     sourceInput.value = this.sourceFilter;
     sourceInput.addEventListener("input", () => this.setSourceFilter(sourceInput.value));
 
-    const typeSelect = searchRow.createEl("select");
-    for (const [value, label] of [
-      ["all", this.plugin.t("filter.type.all")],
-      ["highlight", this.plugin.t("filter.type.highlight")],
-      ["underline", this.plugin.t("filter.type.underline")],
-      ["strikethrough", this.plugin.t("filter.type.strikethrough")],
-      ["comment", this.plugin.t("filter.type.comment")]
-    ] as const) {
-      const option = typeSelect.createEl("option", { text: label });
-      option.value = value;
-    }
-    typeSelect.value = this.typeFilter;
-    typeSelect.addEventListener("change", () => this.setTypeFilter(typeSelect.value as MarkFilter));
-
     const colorSelect = searchRow.createEl("select");
     for (const [value, label] of [
       ["all", this.plugin.t("filter.color.all")],
@@ -172,6 +163,29 @@ export class SideCommentsCrossNoteView extends ItemView {
 
     if (this.hasActiveFilters()) {
       createToolbarButton(searchRow, this.plugin.t("filter.clear.short"), this.plugin.t("filter.clear"), () => this.clearFilters());
+    }
+
+    createToolbarButton(searchRow, this.plugin.t("draft.copy"), this.plugin.t("draft.copyTooltip"), () => {
+      void this.copyDraft(this.getFilteredResults());
+    });
+
+    const typeFilterRow = header.createDiv({ cls: "side-comments-filter-chip-row" });
+    typeFilterRow.createSpan({ cls: "side-comments-filter-chip-label", text: this.plugin.t("annotationType.placeholder") });
+    for (const type of ANNOTATION_TYPES) {
+      createToolbarButton(typeFilterRow, annotationTypeLabel(type, this.plugin.t), annotationTypeLabel(type, this.plugin.t), () => {
+        this.toggleAnnotationTypeFilter(type);
+      }, this.annotationTypeFilters.has(type));
+    }
+
+    const availableTags = this.getAvailableTags();
+    if (availableTags.length > 0) {
+      const tagFilterRow = header.createDiv({ cls: "side-comments-filter-chip-row" });
+      tagFilterRow.createSpan({ cls: "side-comments-filter-chip-label", text: this.plugin.t("tags.label") });
+      for (const tag of availableTags) {
+        createToolbarButton(tagFilterRow, tag, tag, () => {
+          this.toggleTagFilter(tag);
+        }, this.tagFilters.has(normalizeTagKey(tag)));
+      }
     }
 
     const filtered = this.getFilteredResults();
@@ -217,7 +231,7 @@ export class SideCommentsCrossNoteView extends ItemView {
       const headerRow = card.createDiv({ cls: "side-comments-card-header" });
       const meta = headerRow.createDiv({ cls: "side-comments-card-meta" });
       meta.createSpan({ cls: `side-comments-color-dot side-comments-color-dot--${result.color}` });
-      meta.createSpan({ text: `${result.fileName} · ${statusLabel(result.status, this.plugin.t)}` });
+      meta.createSpan({ text: `${result.fileName} · ${annotationTypeLabel(result.annotationType, this.plugin.t)} · ${statusLabel(result.status, this.plugin.t)}` });
 
       const actions = headerRow.createDiv({ cls: "side-comments-card-header-actions" });
       createToolbarButton(actions, this.plugin.t("action.openSource"), this.plugin.t("action.openSource"), () => {
@@ -233,8 +247,12 @@ export class SideCommentsCrossNoteView extends ItemView {
       card.createDiv({ cls: "side-comments-card-note", text: result.notePreview || this.plugin.t("card.emptyNote") });
       card.createDiv({
         cls: "side-comments-card-context",
-        text: `${getResultTypeLabel(result, this.plugin)} · ${colorLabel(result.color, this.plugin.t)}`
+        text: `${markLabel(result.markType, this.plugin.t)} · ${colorLabel(result.color, this.plugin.t)}`
       });
+      const tags = normalizeTags(result.tags);
+      if (tags.length > 0) {
+        card.createDiv({ cls: "side-comments-card-context", text: `${this.plugin.t("tags.label")}: ${tags.join(", ")}` });
+      }
     }
   }
 
@@ -243,7 +261,7 @@ export class SideCommentsCrossNoteView extends ItemView {
   }
 
   private hasActiveFilters(): boolean {
-    return Boolean(this.searchQuery.trim() || this.sourceFilter.trim() || this.statusFilter !== "all" || this.colorFilter !== "all" || this.typeFilter !== "all");
+    return Boolean(this.searchQuery.trim() || this.sourceFilter.trim() || this.statusFilter !== "all" || this.colorFilter !== "all" || this.annotationTypeFilters.size > 0 || this.tagFilters.size > 0);
   }
 
   private getFilteredResults(): CrossNoteResult[] {
@@ -256,7 +274,10 @@ export class SideCommentsCrossNoteView extends ItemView {
       if (this.colorFilter !== "all" && result.color !== this.colorFilter) {
         return false;
       }
-      if (this.typeFilter !== "all" && !matchesMarkType(result.markType, result.color, this.typeFilter)) {
+      if (this.annotationTypeFilters.size > 0 && !this.annotationTypeFilters.has(result.annotationType)) {
+        return false;
+      }
+      if (this.tagFilters.size > 0 && !result.tags.some((tag) => this.tagFilters.has(normalizeTagKey(tag)))) {
         return false;
       }
       if (sourceQuery) {
@@ -274,24 +295,51 @@ export class SideCommentsCrossNoteView extends ItemView {
         result.notePreview.toLowerCase().includes(query) ||
         result.filePath.toLowerCase().includes(query) ||
         result.fileName.toLowerCase().includes(query) ||
-        result.status.toLowerCase().includes(query)
+        result.status.toLowerCase().includes(query) ||
+        result.annotationType.toLowerCase().includes(query) ||
+        result.tags.some((tag) => tag.toLowerCase().includes(query))
       );
     });
   }
-}
 
-function matchesMarkType(markType: MarkType, color: MarkColor, filter: MarkFilter): boolean {
-  if (filter === "comment") {
-    return markType === "highlight" && color === "purple";
+  private toggleAnnotationTypeFilter(type: AnnotationType): void {
+    if (this.annotationTypeFilters.has(type)) {
+      this.annotationTypeFilters.delete(type);
+    } else {
+      this.annotationTypeFilters.add(type);
+    }
+    void this.render();
   }
-  return markType === filter;
-}
 
-function getResultTypeLabel(result: CrossNoteResult, plugin: SideCommentsPlugin): string {
-  if (result.markType === "highlight" && result.color === "purple") {
-    return plugin.t("filter.type.comment");
+  private toggleTagFilter(tag: string): void {
+    const key = normalizeTagKey(tag);
+    if (this.tagFilters.has(key)) {
+      this.tagFilters.delete(key);
+    } else {
+      this.tagFilters.add(key);
+    }
+    void this.render();
   }
-  return markLabel(result.markType, plugin.t);
+
+  private getAvailableTags(): string[] {
+    return normalizeTags(this.results.flatMap((result) => result.tags)).sort((left, right) =>
+      left.localeCompare(right, undefined, { sensitivity: "base" })
+    );
+  }
+
+  private async copyDraft(results: CrossNoteResult[]): Promise<void> {
+    const grouped = new Map<string, SideComment[]>();
+    for (const result of results) {
+      const document = await this.plugin.store.loadDocument(result.filePath);
+      const comment = document.comments.find((item) => item.id === result.commentId);
+      if (!comment) {
+        continue;
+      }
+      grouped.set(result.filePath, [...(grouped.get(result.filePath) ?? []), comment]);
+    }
+
+    await this.plugin.copyAnnotationDraft([...grouped.entries()].map(([filePath, comments]) => ({ filePath, comments })));
+  }
 }
 
 function flattenRecentPreviews(items: RecentPreviewItem[]): CrossNoteResult[] {
@@ -308,6 +356,8 @@ function flattenRecentPreviews(items: RecentPreviewItem[]): CrossNoteResult[] {
         markType: preview.markType,
         color: preview.color,
         status: preview.status,
+        annotationType: preview.annotationType ?? "excerpt",
+        tags: normalizeTags(preview.tags),
         updatedAt: item.updatedAt
       });
     }
@@ -319,10 +369,11 @@ function createToolbarButton(
   container: HTMLElement,
   label: string,
   tooltip: string,
-  onClick: () => void
+  onClick: () => void,
+  active = false
 ): HTMLButtonElement {
   const button = container.createEl("button", {
-    cls: "side-comments-toolbar-button",
+    cls: ["side-comments-toolbar-button", active ? "is-active" : ""].filter(Boolean).join(" "),
     attr: {
       type: "button",
       title: tooltip,

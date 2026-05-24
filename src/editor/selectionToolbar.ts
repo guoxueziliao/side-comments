@@ -1,5 +1,6 @@
-import type { MarkColor, MarkType, SelectionAction } from "../types";
+import type { AnnotationType, MarkColor, MarkType, SelectionAction } from "../types";
 import type { Translator } from "../i18n";
+import { ANNOTATION_TYPES, annotationTypeLabel } from "../organization/annotationMetadata";
 
 export interface SelectionToolbarAction {
   id: SelectionAction;
@@ -7,6 +8,7 @@ export interface SelectionToolbarAction {
   color: MarkColor;
   titleKey: "toolbar.highlight" | "toolbar.underline" | "toolbar.strikethrough" | "toolbar.comment";
   shortLabelKey: "toolbar.highlight.short" | "toolbar.underline.short" | "toolbar.strikethrough.short" | "toolbar.comment.short";
+  annotationType?: AnnotationType;
 }
 
 export const TOOLBAR_ACTIONS: SelectionToolbarAction[] = [
@@ -18,6 +20,7 @@ export const TOOLBAR_ACTIONS: SelectionToolbarAction[] = [
 
 export class SelectionToolbar {
   private readonly root: HTMLDivElement;
+  private annotationType: AnnotationType = "excerpt";
 
   constructor(
     private readonly host: HTMLElement,
@@ -32,6 +35,25 @@ export class SelectionToolbar {
     this.root = host.createDiv({ cls: "side-comments-toolbar" });
     this.root.style.position = "fixed";
     this.root.style.display = "none";
+
+    const typeSelect = this.root.createEl("select", {
+      cls: "side-comments-toolbar-type-select",
+      attr: {
+        title: this.t("annotationType.defaultTooltip"),
+        "aria-label": this.t("annotationType.placeholder")
+      }
+    });
+    for (const type of ANNOTATION_TYPES) {
+      const option = typeSelect.createEl("option", { text: annotationTypeLabel(type, this.t) });
+      option.value = type;
+    }
+    typeSelect.value = this.annotationType;
+    typeSelect.addEventListener("mousedown", (event) => {
+      event.stopPropagation();
+    });
+    typeSelect.addEventListener("change", () => {
+      this.annotationType = typeSelect.value as AnnotationType;
+    });
 
     for (const action of TOOLBAR_ACTIONS) {
       const title = this.t(action.titleKey);
@@ -52,7 +74,10 @@ export class SelectionToolbar {
       button.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
-        this.onAction(action);
+        this.onAction({
+          ...action,
+          annotationType: this.annotationType
+        });
         this.hide();
       });
     }

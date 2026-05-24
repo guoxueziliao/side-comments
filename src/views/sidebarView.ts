@@ -2,14 +2,23 @@ import { ItemView, WorkspaceLeaf } from "obsidian";
 import type SideCommentsPlugin from "../../main";
 import { sortComments } from "../storage/migration";
 import type {
+  AnnotationType,
   ColorFilter,
   CommentDraft,
-  MarkFilter,
   SidebarDisplayMode,
   StatusFilter,
   SideComment
 } from "../types";
 import { renderCommentCard } from "./commentCard";
+import {
+  ANNOTATION_TYPES,
+  annotationTypeLabel,
+  collectAnnotationTags,
+  getAnnotationType,
+  hasAnyNormalizedTag,
+  normalizeTagKey,
+  normalizeTags
+} from "../organization/annotationMetadata";
 
 export const SIDE_COMMENTS_VIEW_TYPE = "side-comments-view";
 
@@ -22,9 +31,10 @@ export class SideCommentsSidebarView extends ItemView {
   private editingCommentId: string | null = null;
   private flashTimer: number | null = null;
   private searchQuery = "";
-  private markFilter: MarkFilter = "all";
   private colorFilter: ColorFilter = "all";
   private statusFilter: StatusFilter = "all";
+  private readonly annotationTypeFilters = new Set<AnnotationType>();
+  private readonly tagFilters = new Set<string>();
 
   constructor(leaf: WorkspaceLeaf, private readonly plugin: SideCommentsPlugin) {
     super(leaf);
@@ -55,11 +65,6 @@ export class SideCommentsSidebarView extends ItemView {
 
   setSearchQuery(value: string): void {
     this.searchQuery = value;
-    void this.render();
-  }
-
-  setMarkFilter(value: MarkFilter): void {
-    this.markFilter = value;
     void this.render();
   }
 
@@ -142,7 +147,9 @@ export class SideCommentsSidebarView extends ItemView {
       noteContent: draft.noteContent,
       markType: draft.markType,
       color: draft.color,
-      status: draft.status
+      status: draft.status,
+      annotationType: draft.annotationType,
+      tags: draft.tags
     });
 
     this.drafts.delete(commentId);
@@ -154,6 +161,18 @@ export class SideCommentsSidebarView extends ItemView {
   async toggleStatus(commentId: string, nextStatus: SideComment["status"]): Promise<void> {
     const updated = await this.plugin.setCommentStatus(commentId, nextStatus);
     this.expandedResolvedCommentIds.delete(commentId);
+    this.plugin.setCurrentDocument(updated);
+    this.plugin.refreshAllViews();
+  }
+
+  async setCommentAnnotationType(commentId: string, annotationType: AnnotationType): Promise<void> {
+    const updated = await this.plugin.updateComment(commentId, { annotationType });
+    this.plugin.setCurrentDocument(updated);
+    this.plugin.refreshAllViews();
+  }
+
+  async setCommentTags(commentId: string, tags: string[]): Promise<void> {
+    const updated = await this.plugin.updateComment(commentId, { tags });
     this.plugin.setCurrentDocument(updated);
     this.plugin.refreshAllViews();
   }
@@ -246,6 +265,9 @@ export class SideCommentsSidebarView extends ItemView {
     createToolbarButton(exportRow, this.plugin.t("export.format.markdown"), this.plugin.t("export.currentNote"), () => {
       void this.plugin.exportCurrentNoteAnnotations("markdown");
     });
+    createToolbarButton(exportRow, this.plugin.t("draft.copy"), this.plugin.t("draft.copyTooltip"), () => {
+      void this.copyCurrentDraft();
+    });
 
     const searchRow = header.createDiv({ cls: "side-comments-toolbar-row" });
     const searchInput = searchRow.createEl("input", {
@@ -257,22 +279,6 @@ export class SideCommentsSidebarView extends ItemView {
     searchInput.value = this.searchQuery;
     searchInput.addEventListener("input", () => {
       this.setSearchQuery(searchInput.value);
-    });
-
-    const markSelect = searchRow.createEl("select");
-    for (const [value, label] of [
-      ["all", this.plugin.t("filter.type.all")],
-      ["highlight", this.plugin.t("filter.type.highlight")],
-      ["underline", this.plugin.t("filter.type.underline")],
-      ["strikethrough", this.plugin.t("filter.type.strikethrough")],
-      ["comment", this.plugin.t("filter.type.comment")]
-    ] as const) {
-      const option = markSelect.createEl("option", { text: label });
-      option.value = value;
-    }
-    markSelect.value = this.markFilter;
-    markSelect.addEventListener("change", () => {
-      this.setMarkFilter(markSelect.value as MarkFilter);
     });
 
     const colorSelect = searchRow.createEl("select");
@@ -307,6 +313,14 @@ export class SideCommentsSidebarView extends ItemView {
       this.setStatusFilter(statusSelect.value as StatusFilter);
     });
 
+    const typeFilterRow = header.createDiv({ cls: "side-comments-filter-chip-row" });
+    typeFilterRow.createSpan({ cls: "side-comments-filter-chip-label", text: this.plugin.t("annotationType.placeholder") });
+    for (const type of ANNOTATION_TYPES) {
+      createToolbarButton(typeFilterRow, annotationTypeLabel(type, this.plugin.t), annotationTypeLabel(type, this.plugin.t), () => {
+        this.toggleAnnotationTypeFilter(type);
+      }, this.annotationTypeFilters.has(type));
+    }
+
     if (this.hasActiveFilters()) {
       createToolbarButton(searchRow, this.plugin.t("filter.clear.short"), this.plugin.t("filter.clear"), () => {
         this.clearFilters();
@@ -324,6 +338,17 @@ export class SideCommentsSidebarView extends ItemView {
       header.createDiv({ cls: "side-comments-subtitle", text: this.plugin.t("sidebar.noCurrentDocument") });
       content.createDiv({ cls: "side-comments-empty", text: this.plugin.t("empty.noMarkdownFile") });
       return;
+    }
+
+    const availableTags = collectAnnotationTags(document.comments);
+    if (availableTags.length > 0) {
+      const tagFilterRow = header.createDiv({ cls: "side-comments-filter-chip-row" });
+      tagFilterRow.createSpan({ cls: "side-comments-filter-chip-label", text: this.plugin.t("tags.label") });
+      for (const tag of availableTags) {
+        createToolbarButton(tagFilterRow, tag, tag, () => {
+          this.toggleTagFilter(tag);
+        }, this.tagFilters.has(normalizeTagKey(tag)));
+      }
     }
 
     const filtered = this.getFilteredComments(document.comments);
@@ -409,7 +434,14 @@ export class SideCommentsSidebarView extends ItemView {
         },
         onDraftChange: (commentId, draft) => {
           this.updateDraft(commentId, draft);
-        }
+        },
+        onSetAnnotationType: (commentId, annotationType) => {
+          void this.setCommentAnnotationType(commentId, annotationType);
+        },
+        onSetTags: (commentId, tags) => {
+          void this.setCommentTags(commentId, tags);
+        },
+        tagSuggestions: availableTags
       });
 
       if (this.focusedCommentId === comment.id) {
@@ -436,14 +468,10 @@ export class SideCommentsSidebarView extends ItemView {
 
   private getFilteredComments(comments: SideComment[]): SideComment[] {
     const query = this.searchQuery.trim().toLowerCase();
+    const normalizedTagFilters = new Set(this.tagFilters);
     const matches = comments.filter((comment) => {
       if (!this.plugin.settings.showResolvedComments && comment.status === "resolved") {
         return false;
-      }
-      if (this.markFilter !== "all" && comment.mark.type !== this.markFilter) {
-        if (!(this.markFilter === "comment" && isCommentLikeMark(comment))) {
-          return false;
-        }
       }
       if (this.colorFilter !== "all" && comment.mark.color !== this.colorFilter) {
         return false;
@@ -451,12 +479,20 @@ export class SideCommentsSidebarView extends ItemView {
       if (this.statusFilter !== "all" && comment.status !== this.statusFilter) {
         return false;
       }
+      if (this.annotationTypeFilters.size > 0 && !this.annotationTypeFilters.has(getAnnotationType(comment))) {
+        return false;
+      }
+      if (!hasAnyNormalizedTag(comment, normalizedTagFilters)) {
+        return false;
+      }
       if (!query) {
         return true;
       }
       return (
         comment.anchor.selectedText.toLowerCase().includes(query) ||
-        comment.note.content.toLowerCase().includes(query)
+        comment.note.content.toLowerCase().includes(query) ||
+        getAnnotationType(comment).toLowerCase().includes(query) ||
+        normalizeTags(comment.tags).some((tag) => tag.toLowerCase().includes(query))
       );
     });
 
@@ -469,15 +505,16 @@ export class SideCommentsSidebarView extends ItemView {
     }
 
     const matchesBeforeResolvedVisibility = comments.filter((comment) => {
-      if (this.markFilter !== "all" && comment.mark.type !== this.markFilter) {
-        if (!(this.markFilter === "comment" && isCommentLikeMark(comment))) {
-          return false;
-        }
-      }
       if (this.colorFilter !== "all" && comment.mark.color !== this.colorFilter) {
         return false;
       }
       if (this.statusFilter !== "all" && comment.status !== this.statusFilter) {
+        return false;
+      }
+      if (this.annotationTypeFilters.size > 0 && !this.annotationTypeFilters.has(getAnnotationType(comment))) {
+        return false;
+      }
+      if (!hasAnyNormalizedTag(comment, this.tagFilters)) {
         return false;
       }
 
@@ -487,7 +524,9 @@ export class SideCommentsSidebarView extends ItemView {
       }
       return (
         comment.anchor.selectedText.toLowerCase().includes(query) ||
-        comment.note.content.toLowerCase().includes(query)
+        comment.note.content.toLowerCase().includes(query) ||
+        getAnnotationType(comment).toLowerCase().includes(query) ||
+        normalizeTags(comment.tags).some((tag) => tag.toLowerCase().includes(query))
       );
     });
 
@@ -515,15 +554,45 @@ export class SideCommentsSidebarView extends ItemView {
   }
 
   private hasActiveFilters(): boolean {
-    return Boolean(this.searchQuery.trim()) || this.markFilter !== "all" || this.colorFilter !== "all" || this.statusFilter !== "all";
+    return Boolean(this.searchQuery.trim()) ||
+      this.colorFilter !== "all" ||
+      this.statusFilter !== "all" ||
+      this.annotationTypeFilters.size > 0 ||
+      this.tagFilters.size > 0;
   }
 
   private clearFilters(): void {
     this.searchQuery = "";
-    this.markFilter = "all";
     this.colorFilter = "all";
     this.statusFilter = "all";
+    this.annotationTypeFilters.clear();
+    this.tagFilters.clear();
     void this.render();
+  }
+
+  private toggleAnnotationTypeFilter(type: AnnotationType): void {
+    if (this.annotationTypeFilters.has(type)) {
+      this.annotationTypeFilters.delete(type);
+    } else {
+      this.annotationTypeFilters.add(type);
+    }
+    void this.render();
+  }
+
+  private toggleTagFilter(tag: string): void {
+    const key = normalizeTagKey(tag);
+    if (this.tagFilters.has(key)) {
+      this.tagFilters.delete(key);
+    } else {
+      this.tagFilters.add(key);
+    }
+    void this.render();
+  }
+
+  private async copyCurrentDraft(): Promise<void> {
+    const { document } = this.getDocumentState();
+    const comments = document ? this.getFilteredComments(document.comments) : [];
+    await this.plugin.copyAnnotationDraft(document ? [{ filePath: document.filePath, comments }] : []);
   }
 
   private findComment(commentId: string): SideComment | null {
@@ -577,15 +646,13 @@ function createToolbarButton(
   return button;
 }
 
-function isCommentLikeMark(comment: SideComment): boolean {
-  return comment.mark.type === "highlight" && comment.mark.color === "purple";
-}
-
 function draftFromComment(comment: SideComment): CommentDraft {
   return {
     noteContent: comment.note.content,
     markType: comment.mark.type,
     color: comment.mark.color,
-    status: comment.status === "orphaned" ? "active" : comment.status
+    status: comment.status === "orphaned" ? "active" : comment.status,
+    annotationType: getAnnotationType(comment),
+    tags: normalizeTags(comment.tags)
   };
 }

@@ -19,6 +19,7 @@ import { SideCommentsSettingTab } from "./src/settings/settingsTab";
 import { SidecarStore } from "./src/storage/sidecarStore";
 import { normalizeVaultRelativePath } from "./src/storage/pathHash";
 import { createExportPackage, exportPackageToMarkdown, serializeExportPackage } from "./src/storage/export";
+import { formatAnnotationMarkdownDraft, type AnnotationDraftGroup } from "./src/organization/markdownDraft";
 import { SideCommentsSidebarView, SIDE_COMMENTS_VIEW_TYPE } from "./src/views/sidebarView";
 import { SideCommentsCrossNoteView, SIDE_COMMENTS_CROSS_NOTE_VIEW_TYPE } from "./src/views/crossNoteView";
 import { createTranslator, type Translator } from "./src/i18n";
@@ -474,7 +475,8 @@ export default class SideCommentsPlugin extends Plugin {
         endOffset,
         markType: action.type,
         color: action.color,
-        sourceMode
+        sourceMode,
+        annotationType: action.annotationType ?? "excerpt"
       });
 
       this.currentDocument = result.document;
@@ -630,6 +632,25 @@ export default class SideCommentsPlugin extends Plugin {
     } catch (error) {
       console.error("Side Comments failed to export all sidecars", error);
       new Notice(this.t("export.failed"));
+    }
+  }
+
+  async copyAnnotationDraft(groups: AnnotationDraftGroup[]): Promise<void> {
+    const nonEmptyGroups = groups
+      .map((group) => ({ ...group, comments: group.comments.filter(Boolean) }))
+      .filter((group) => group.comments.length > 0);
+
+    if (nonEmptyGroups.length === 0) {
+      new Notice(this.t("draft.empty"));
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(formatAnnotationMarkdownDraft(nonEmptyGroups, this.t));
+      new Notice(this.t("draft.copied"));
+    } catch (error) {
+      console.error("Side Comments failed to copy annotation draft", error);
+      new Notice(this.t("draft.copyFailed"));
     }
   }
 

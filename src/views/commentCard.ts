@@ -1,5 +1,12 @@
-import type { CommentDraft, MarkColor, SidebarDisplayMode, SideComment, SideCommentStatus } from "../types";
+import type { AnnotationType, CommentDraft, MarkColor, SidebarDisplayMode, SideComment, SideCommentStatus } from "../types";
 import type { Translator } from "../i18n";
+import {
+  ANNOTATION_TYPES,
+  annotationTypeLabel,
+  getAnnotationType,
+  normalizeTagKey,
+  normalizeTags
+} from "../organization/annotationMetadata";
 
 export interface CommentCardContext {
   t: Translator;
@@ -18,6 +25,9 @@ export interface CommentCardContext {
   onRebind: (commentId: string) => void;
   onAdjustRange: (commentId: string) => void;
   onDraftChange: (commentId: string, draft: CommentDraft) => void;
+  onSetAnnotationType: (commentId: string, annotationType: AnnotationType) => void;
+  onSetTags: (commentId: string, tags: string[]) => void;
+  tagSuggestions: string[];
 }
 
 export function renderCommentCard(
@@ -38,7 +48,7 @@ export function renderCommentCard(
   const header = card.createDiv({ cls: "side-comments-card-header" });
   const meta = header.createDiv({ cls: "side-comments-card-meta" });
   meta.createSpan({ cls: `side-comments-color-dot side-comments-color-dot--${comment.mark.color}` });
-  meta.createSpan({ text: `${markLabel(comment, context.t)} · ${colorLabel(comment.mark.color, context.t)}` });
+  meta.createSpan({ text: `${annotationTypeLabel(getAnnotationType(comment), context.t)} · ${markLabel(comment, context.t)} · ${colorLabel(comment.mark.color, context.t)}` });
   meta.createSpan({ text: ` · ${statusLabel(comment.status, context.t)}` });
   meta.createSpan({ text: ` · ${formatTime(comment.note.updatedAt)}` });
 
@@ -117,6 +127,8 @@ export function renderCommentCard(
   if (!context.expanded) {
     body.addClass("is-collapsed");
   }
+
+  renderOrganizationFields(body, comment, context);
 
   body.createDiv({ cls: "side-comments-card-section-title", text: context.t("card.source") });
   body.createDiv({
@@ -257,6 +269,92 @@ function renderEditFields(container: HTMLElement, comment: SideComment, context:
   });
   createActionButton(actionRow, context.t("action.cancel.short"), context.t("action.cancel"), () => {
     context.onCancelEdit(comment.id);
+  });
+}
+
+function renderOrganizationFields(container: HTMLElement, comment: SideComment, context: CommentCardContext): void {
+  const currentType = getAnnotationType(comment);
+  const currentTags = normalizeTags(comment.tags);
+
+  const row = container.createDiv({ cls: "side-comments-card-organization" });
+  const typeSelect = row.createEl("select", {
+    cls: "side-comments-annotation-type-select",
+    attr: {
+      title: context.t("annotationType.defaultTooltip"),
+      "aria-label": context.t("annotationType.placeholder")
+    }
+  });
+  for (const type of ANNOTATION_TYPES) {
+    const option = typeSelect.createEl("option", { text: annotationTypeLabel(type, context.t) });
+    option.value = type;
+  }
+  typeSelect.value = currentType;
+  typeSelect.addEventListener("change", () => {
+    context.onSetAnnotationType(comment.id, typeSelect.value as AnnotationType);
+  });
+
+  const tagEditor = row.createDiv({ cls: "side-comments-tag-editor" });
+  tagEditor.createSpan({ cls: "side-comments-tag-label", text: context.t("tags.label") });
+  const chips = tagEditor.createDiv({ cls: "side-comments-tag-chips" });
+
+  const updateTags = (tags: string[]) => {
+    context.onSetTags(comment.id, tags);
+  };
+
+  for (const tag of currentTags) {
+    const chip = chips.createSpan({ cls: "side-comments-tag-chip" });
+    chip.createSpan({ text: tag });
+    const remove = chip.createEl("button", {
+      cls: "side-comments-tag-remove",
+      attr: {
+        type: "button",
+        title: context.t("tags.remove"),
+        "aria-label": context.t("tags.remove")
+      }
+    });
+    remove.setText("x");
+    remove.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      updateTags(currentTags.filter((item) => normalizeTagKey(item) !== normalizeTagKey(tag)));
+    });
+  }
+
+  if (currentTags.length === 0) {
+    chips.createSpan({ cls: "side-comments-tag-empty", text: context.t("tags.empty") });
+  }
+
+  const listId = `side-comments-tag-options-${comment.id}`;
+  const dataList = tagEditor.createEl("datalist");
+  dataList.id = listId;
+  const existingKeys = new Set(currentTags.map((tag) => normalizeTagKey(tag)));
+  for (const suggestion of context.tagSuggestions) {
+    if (existingKeys.has(normalizeTagKey(suggestion))) {
+      continue;
+    }
+    const option = dataList.createEl("option");
+    option.value = suggestion;
+  }
+
+  const input = tagEditor.createEl("input", {
+    cls: "side-comments-tag-input",
+    attr: {
+      type: "text",
+      list: listId,
+      placeholder: context.t("tags.placeholder"),
+      "aria-label": context.t("tags.placeholder")
+    }
+  });
+  input.addEventListener("keydown", (event) => {
+    if (event.isComposing || event.key !== "Enter") {
+      return;
+    }
+    event.preventDefault();
+    const tags = normalizeTags([...currentTags, input.value]);
+    if (tags.length !== currentTags.length) {
+      updateTags(tags);
+      input.value = "";
+    }
   });
 }
 

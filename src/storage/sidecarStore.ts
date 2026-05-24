@@ -13,6 +13,7 @@ import {
   type SideCommentDocument,
   type SideCommentsManifest
 } from "../types";
+import { normalizeTags } from "../organization/annotationMetadata";
 import { createRecentPreview } from "./recentPreview";
 import { LruCache } from "./lruCache";
 import { migrateDocument, sortComments } from "./migration";
@@ -149,6 +150,8 @@ export class SidecarStore {
         type: input.markType,
         color: input.color
       },
+      annotationType: input.annotationType ?? "excerpt",
+      tags: [],
       note: {
         content: "",
         createdAt: now,
@@ -185,6 +188,8 @@ export class SidecarStore {
           type: input.markType ?? comment.mark.type,
           color: input.color ?? comment.mark.color
         },
+        annotationType: input.annotationType ?? comment.annotationType,
+        tags: input.tags !== undefined ? normalizeTags(input.tags) : comment.tags,
         note: {
           ...comment.note,
           content: input.noteContent ?? comment.note.content,
@@ -534,7 +539,11 @@ function normalizeRecentPreviewComment(value: unknown): RecentPreviewItem["previ
       notePreview: raw.notePreview,
       markType: raw.markType,
       color: raw.color,
-      status
+      status,
+      annotationType: raw.annotationType === "question" || raw.annotationType === "thought" || raw.annotationType === "task" || raw.annotationType === "excerpt"
+        ? raw.annotationType
+        : undefined,
+      tags: Array.isArray(raw.tags) ? normalizeTags(raw.tags.filter((tag): tag is string => typeof tag === "string")) : undefined
     }
   ];
 }

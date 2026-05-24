@@ -52,7 +52,10 @@
 
 .side-comments-toolbar-row input,
 .side-comments-toolbar-row select,
-.side-comments-card-edit-row select {
+.side-comments-card-edit-row select,
+.side-comments-toolbar-type-select,
+.side-comments-annotation-type-select,
+.side-comments-tag-input {
   min-height: 28px;
   font-size: var(--font-ui-smaller);
 }
@@ -73,6 +76,20 @@
 
 .side-comments-toolbar-row--export {
   justify-content: flex-start;
+}
+
+.side-comments-filter-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.side-comments-filter-chip-label,
+.side-comments-tag-label {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-weight: 600;
 }
 
 .side-comments-selected-notes-export-list {
@@ -346,6 +363,78 @@
   gap: 6px;
 }
 
+.side-comments-card-organization {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.side-comments-annotation-type-select {
+  flex: 0 1 120px;
+}
+
+.side-comments-tag-editor {
+  display: flex;
+  flex: 1 1 180px;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.side-comments-tag-chips {
+  display: inline-flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.side-comments-tag-chip {
+  display: inline-flex;
+  max-width: 180px;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 2px 6px;
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  font-size: var(--font-ui-smaller);
+}
+
+.side-comments-tag-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.side-comments-tag-remove {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.side-comments-tag-empty {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.side-comments-tag-input {
+  flex: 1 1 100px;
+  min-width: 80px;
+}
+
 .side-comments-card-textarea {
   width: 100%;
   min-height: 92px;
@@ -364,6 +453,10 @@
   border-radius: 6px;
   background: var(--background-primary);
   box-shadow: var(--shadow-s);
+}
+
+.side-comments-toolbar-type-select {
+  max-width: 96px;
 }
 
 .side-comments-mark {

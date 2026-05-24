@@ -1,4 +1,5 @@
 import type { RecentPreviewItem, SideCommentDocument } from "../types";
+import { getAnnotationType, normalizeTags } from "../organization/annotationMetadata";
 
 export function createRecentPreview(document: SideCommentDocument, maxItems = 5): RecentPreviewItem {
   return {
@@ -11,7 +12,9 @@ export function createRecentPreview(document: SideCommentDocument, maxItems = 5)
       notePreview: comment.note.content.slice(0, 120),
       markType: comment.mark.type,
       color: comment.mark.color,
-      status: comment.status
+      status: comment.status,
+      annotationType: getAnnotationType(comment),
+      tags: normalizeTags(comment.tags)
     }))
   };
 }

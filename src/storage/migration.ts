@@ -6,6 +6,7 @@ import {
   type SideComment,
   type SideCommentDocument
 } from "../types";
+import { isAnnotationType, normalizeTags } from "../organization/annotationMetadata";
 import { getBackupPath } from "./pathHash";
 
 export interface MigrationContext {
@@ -100,6 +101,8 @@ function normalizeComment(comment: unknown): SideComment {
       type: isMarkType(mark.type) ? mark.type : "highlight",
       color: isMarkColor(mark.color) ? mark.color : "yellow"
     },
+    annotationType: isAnnotationType(raw.annotationType) ? raw.annotationType : undefined,
+    tags: Array.isArray(raw.tags) ? normalizeTags(raw.tags.filter((tag): tag is string => typeof tag === "string")) : undefined,
     note: {
       content: typeof note.content === "string" ? note.content : "",
       createdAt: typeof note.createdAt === "string" ? note.createdAt : new Date().toISOString(),

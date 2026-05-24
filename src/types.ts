@@ -10,6 +10,8 @@ export type ColorFilter = "all" | MarkColor;
 export type StatusFilter = "all" | SideCommentStatus;
 export type SelectionAction = "highlight" | "underline" | "strikethrough" | "comment";
 export type AnchorSourceMode = "source" | "reading";
+export type AnnotationType = "excerpt" | "question" | "thought" | "task";
+export type AnnotationTypeFilter = "all" | AnnotationType;
 
 export interface TextAnchor {
   startOffset: number;
@@ -45,6 +47,8 @@ export interface SideComment {
     type: MarkType;
     color: MarkColor;
   };
+  annotationType?: AnnotationType;
+  tags?: string[];
   note: {
     content: string;
     createdAt: string;
@@ -82,6 +86,8 @@ export interface CommentDraft {
   markType: MarkType;
   color: MarkColor;
   status: SideCommentStatus;
+  annotationType: AnnotationType;
+  tags: string[];
 }
 
 export interface CommentCreateInput {
@@ -92,6 +98,7 @@ export interface CommentCreateInput {
   markType: MarkType;
   color: MarkColor;
   sourceMode: AnchorSourceMode;
+  annotationType?: AnnotationType;
 }
 
 export interface CommentUpdateInput {
@@ -99,6 +106,8 @@ export interface CommentUpdateInput {
   markType?: MarkType;
   color?: MarkColor;
   status?: SideCommentStatus;
+  annotationType?: AnnotationType;
+  tags?: string[];
 }
 
 export interface CommentQuery {
@@ -119,6 +128,8 @@ export interface RecentPreviewItem {
     markType: MarkType;
     color: MarkColor;
     status: SideCommentStatus;
+    annotationType?: AnnotationType;
+    tags?: string[];
   }[];
 }
 
