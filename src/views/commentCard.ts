@@ -1,6 +1,9 @@
-import type { CommentDraft, SideComment, SideCommentStatus } from "../types";
+import type { CommentDraft, MarkColor, SidebarDisplayMode, SideComment, SideCommentStatus } from "../types";
+import type { Translator } from "../i18n";
 
 export interface CommentCardContext {
+  t: Translator;
+  displayMode: SidebarDisplayMode;
   expanded: boolean;
   editing: boolean;
   flash: boolean;
@@ -34,69 +37,108 @@ export function renderCommentCard(
 
   const header = card.createDiv({ cls: "side-comments-card-header" });
   const meta = header.createDiv({ cls: "side-comments-card-meta" });
-  meta.createSpan({ text: `${markLabel(comment.mark.type)} · ${comment.mark.color}` });
-  meta.createSpan({ text: ` · ${statusLabel(comment.status)}` });
+  meta.createSpan({ cls: `side-comments-color-dot side-comments-color-dot--${comment.mark.color}` });
+  meta.createSpan({ text: `${markLabel(comment, context.t)} · ${colorLabel(comment.mark.color, context.t)}` });
+  meta.createSpan({ text: ` · ${statusLabel(comment.status, context.t)}` });
   meta.createSpan({ text: ` · ${formatTime(comment.note.updatedAt)}` });
 
   const headerActions = header.createDiv({ cls: "side-comments-card-header-actions" });
-  createActionButton(headerActions, context.expanded ? "收" : "展", context.expanded ? "收起" : "展开", () => {
+  createActionButton(headerActions, context.expanded ? context.t("action.collapse.short") : context.t("action.expand.short"), context.expanded ? context.t("action.collapse") : context.t("action.expand"), () => {
     context.onToggleExpand(comment.id);
   });
-  createActionButton(headerActions, "跳", "跳回原文", () => {
+  createActionButton(headerActions, context.t("action.jump.short"), context.t("action.jumpToText"), () => {
     context.onJump(comment.id);
   });
   if (comment.status === "orphaned") {
-    createActionButton(headerActions, "绑", "重新绑定到当前选区", () => {
+    createActionButton(headerActions, context.t("action.rebind.short"), context.t("action.rebind.tooltip"), () => {
       context.onRebind(comment.id);
     });
   } else {
-    createActionButton(headerActions, "调", "调整到当前选区", () => {
+    createActionButton(headerActions, context.t("action.adjust.short"), context.t("action.adjust.tooltip"), () => {
       context.onAdjustRange(comment.id);
     });
   }
-  createActionButton(headerActions, context.editing ? "存" : "编", context.editing ? "保存" : "编辑", () => {
+  createActionButton(headerActions, context.editing ? context.t("action.save.short") : context.t("action.edit.short"), context.editing ? context.t("action.save") : context.t("action.edit"), () => {
     if (context.editing) {
       context.onSave(comment.id, context.draft);
     } else {
       context.onBeginEdit(comment.id);
     }
   });
-  createActionButton(headerActions, comment.status === "active" ? "完" : "开", comment.status === "active" ? "已处理" : "重新打开", () => {
+  createActionButton(headerActions, comment.status === "active" ? context.t("action.resolve.short") : context.t("action.restore.short"), comment.status === "active" ? context.t("action.resolve") : context.t("action.restore"), () => {
     if (comment.status === "orphaned") {
       return;
     }
     context.onToggleStatus(comment.id, comment.status === "active" ? "resolved" : "active");
   }, comment.status === "orphaned");
-  createActionButton(headerActions, "删", "删除", () => {
+  createActionButton(headerActions, context.t("action.delete.short"), context.t("action.delete"), () => {
     context.onDelete(comment.id);
   });
+
+  if (!context.expanded && comment.status === "resolved" && !context.editing) {
+    card.createDiv({
+      cls: "side-comments-card-resolved-summary",
+      text: comment.anchor.selectedText || context.t("card.emptySelection")
+    });
+    card.addClass("is-resolved");
+    return card;
+  }
+
+  if (context.displayMode === "compact" && !context.expanded && !context.editing) {
+    card.addClass("side-comments-card--compact");
+    const compactBody = card.createDiv({ cls: "side-comments-card-compact-body" });
+    compactBody.addEventListener("click", () => {
+      context.onToggleExpand(comment.id);
+    });
+
+    compactBody.createDiv({
+      cls: "side-comments-card-compact-text",
+      text: comment.anchor.selectedText || context.t("card.emptySelection")
+    });
+
+    const note = comment.note.content.trim();
+    if (note) {
+      compactBody.createDiv({
+        cls: "side-comments-card-compact-note",
+        text: note
+      });
+    }
+
+    if (comment.status === "orphaned") {
+      card.addClass("is-orphaned");
+    }
+    if (comment.status === "resolved") {
+      card.addClass("is-resolved");
+    }
+    return card;
+  }
 
   const body = card.createDiv({ cls: "side-comments-card-body" });
   if (!context.expanded) {
     body.addClass("is-collapsed");
   }
 
-  body.createDiv({ cls: "side-comments-card-section-title", text: "原文" });
+  body.createDiv({ cls: "side-comments-card-section-title", text: context.t("card.source") });
   body.createDiv({
     cls: "side-comments-card-excerpt",
-    text: comment.anchor.selectedText || "(empty selection)"
+    text: comment.anchor.selectedText || context.t("card.emptySelection")
   });
 
   if (comment.status === "orphaned") {
-    body.createDiv({ cls: "side-comments-card-section-title", text: "上下文" });
+    body.createDiv({ cls: "side-comments-card-section-title", text: context.t("card.context") });
     body.createDiv({
       cls: "side-comments-card-context",
       text: buildAnchorContextPreview(comment)
     });
   }
 
-  body.createDiv({ cls: "side-comments-card-section-title", text: "批注" });
+  body.createDiv({ cls: "side-comments-card-section-title", text: context.t("card.comment") });
   if (context.editing) {
     renderEditFields(body, comment, context);
   } else {
     body.createDiv({
       cls: "side-comments-card-note",
-      text: comment.note.content || "未填写批注"
+      text: comment.note.content || context.t("card.emptyNote")
     });
   }
 
@@ -122,7 +164,7 @@ function renderEditFields(container: HTMLElement, comment: SideComment, context:
   const typeRow = container.createDiv({ cls: "side-comments-card-edit-row" });
   const typeSelect = typeRow.createEl("select");
   for (const value of ["highlight", "underline", "strikethrough"] as const) {
-    const option = typeSelect.createEl("option", { text: markLabel(value) });
+    const option = typeSelect.createEl("option", { text: markLabel(value, context.t) });
     option.value = value;
   }
   typeSelect.value = draft.markType;
@@ -136,7 +178,7 @@ function renderEditFields(container: HTMLElement, comment: SideComment, context:
 
   const colorSelect = typeRow.createEl("select");
   for (const value of ["yellow", "blue", "red", "green", "purple"] as const) {
-    const option = colorSelect.createEl("option", { text: value });
+    const option = colorSelect.createEl("option", { text: colorLabel(value, context.t) });
     option.value = value;
   }
   colorSelect.value = draft.color;
@@ -150,7 +192,7 @@ function renderEditFields(container: HTMLElement, comment: SideComment, context:
 
   const statusSelect = typeRow.createEl("select");
   for (const value of ["active", "resolved"] as const) {
-    const option = statusSelect.createEl("option", { text: statusLabel(value) });
+    const option = statusSelect.createEl("option", { text: statusLabel(value, context.t) });
     option.value = value;
   }
   statusSelect.value = draft.status === "orphaned" ? "active" : draft.status;
@@ -166,7 +208,7 @@ function renderEditFields(container: HTMLElement, comment: SideComment, context:
     cls: "side-comments-card-textarea",
     attr: {
       rows: "4",
-      placeholder: "写下批注... Enter 保存，Shift+Enter 换行"
+      placeholder: context.t("card.notePlaceholder")
     }
   });
   textarea.value = draft.noteContent;
@@ -203,7 +245,7 @@ function renderEditFields(container: HTMLElement, comment: SideComment, context:
   });
 
   const actionRow = container.createDiv({ cls: "side-comments-card-edit-actions" });
-  createActionButton(actionRow, "存", "保存", () => {
+  createActionButton(actionRow, context.t("action.save.short"), context.t("action.save"), () => {
     draft = {
       ...draft,
       noteContent: textarea.value,
@@ -213,7 +255,7 @@ function renderEditFields(container: HTMLElement, comment: SideComment, context:
     };
     context.onSave(comment.id, draft);
   });
-  createActionButton(actionRow, "取", "取消", () => {
+  createActionButton(actionRow, context.t("action.cancel.short"), context.t("action.cancel"), () => {
     context.onCancelEdit(comment.id);
   });
 }
@@ -249,24 +291,49 @@ function createActionButton(
   return button;
 }
 
-function markLabel(markType: SideComment["mark"]["type"]): string {
+export function markLabel(commentOrMarkType: SideComment | SideComment["mark"]["type"], t: Translator): string {
+  if (typeof commentOrMarkType !== "string" && isCommentLikeMark(commentOrMarkType)) {
+    return t("filter.type.comment");
+  }
+
+  const markType = typeof commentOrMarkType === "string" ? commentOrMarkType : commentOrMarkType.mark.type;
   if (markType === "highlight") {
-    return "高亮";
+    return t("filter.type.highlight");
   }
   if (markType === "underline") {
-    return "下划线";
+    return t("filter.type.underline");
   }
-  return "删除线";
+  return t("filter.type.strikethrough");
 }
 
-function statusLabel(status: SideCommentStatus): string {
+export function colorLabel(color: MarkColor, t: Translator): string {
+  if (color === "yellow") {
+    return t("filter.color.yellow");
+  }
+  if (color === "blue") {
+    return t("filter.color.blue");
+  }
+  if (color === "red") {
+    return t("filter.color.red");
+  }
+  if (color === "green") {
+    return t("filter.color.green");
+  }
+  return t("filter.color.purple");
+}
+
+function isCommentLikeMark(comment: SideComment): boolean {
+  return comment.mark.type === "highlight" && comment.mark.color === "purple";
+}
+
+export function statusLabel(status: SideCommentStatus, t: Translator): string {
   if (status === "active") {
-    return "未处理";
+    return t("filter.status.active");
   }
   if (status === "resolved") {
-    return "已处理";
+    return t("filter.status.resolved");
   }
-  return "已失联";
+  return t("filter.status.orphaned");
 }
 
 function formatTime(value: string): string {

@@ -4,7 +4,9 @@ export const DATA_DIR = ".obsidian-side-comments";
 export type MarkType = "highlight" | "underline" | "strikethrough";
 export type MarkColor = "yellow" | "blue" | "red" | "green" | "purple";
 export type SideCommentStatus = "active" | "resolved" | "orphaned";
-export type MarkFilter = "all" | MarkType;
+export type SidebarDisplayMode = "normal" | "compact";
+export type MarkFilter = "all" | MarkType | "comment";
+export type ColorFilter = "all" | MarkColor;
 export type StatusFilter = "all" | SideCommentStatus;
 export type SelectionAction = "highlight" | "underline" | "strikethrough" | "comment";
 export type AnchorSourceMode = "source" | "reading";
@@ -68,6 +70,8 @@ export interface SideCommentsManifest {
 export interface PluginSettings {
   autoOpenSidebarAfterCreate: boolean;
   showResolvedMarks: boolean;
+  showResolvedComments: boolean;
+  sidebarDisplayMode: SidebarDisplayMode;
   maxCachedDocuments: number;
   relocateDebounceMs: number;
   dataDir: typeof DATA_DIR;
@@ -100,6 +104,7 @@ export interface CommentUpdateInput {
 export interface CommentQuery {
   search: string;
   markFilter: MarkFilter;
+  colorFilter: ColorFilter;
   statusFilter: StatusFilter;
 }
 
@@ -113,5 +118,6 @@ export interface RecentPreviewItem {
     notePreview: string;
     markType: MarkType;
     color: MarkColor;
+    status: SideCommentStatus;
   }[];
 }

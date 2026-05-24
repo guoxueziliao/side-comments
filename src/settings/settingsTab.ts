@@ -1,5 +1,6 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type SideCommentsPlugin from "../../main";
+import type { SidebarDisplayMode } from "../types";
 
 export class SideCommentsSettingTab extends PluginSettingTab {
   constructor(app: App, private readonly plugin: SideCommentsPlugin) {
@@ -10,11 +11,11 @@ export class SideCommentsSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    containerEl.createEl("h2", { text: "Side Comments" });
+    containerEl.createEl("h2", { text: this.plugin.t("app.name") });
 
     new Setting(containerEl)
-      .setName("Auto-open sidebar after creating a comment")
-      .setDesc("Open the reading annotation panel after a new annotation is created.")
+      .setName(this.plugin.t("settings.autoOpen.name"))
+      .setDesc(this.plugin.t("settings.autoOpen.desc"))
       .addToggle((toggle) =>
         toggle
           .setValue(this.plugin.settings.autoOpenSidebarAfterCreate)
@@ -25,8 +26,8 @@ export class SideCommentsSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Show resolved marks")
-      .setDesc("Display resolved annotations in the document with reduced visual strength.")
+      .setName(this.plugin.t("settings.showResolvedMarks.name"))
+      .setDesc(this.plugin.t("settings.showResolvedMarks.desc"))
       .addToggle((toggle) =>
         toggle
           .setValue(this.plugin.settings.showResolvedMarks)
@@ -37,8 +38,34 @@ export class SideCommentsSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Cached documents")
-      .setDesc("Number of recently loaded sidecar documents kept in memory.")
+      .setName(this.plugin.t("settings.sidebarDisplayMode.name"))
+      .setDesc(this.plugin.t("settings.sidebarDisplayMode.desc"))
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("normal", this.plugin.t("sidebar.mode.normal"))
+          .addOption("compact", this.plugin.t("sidebar.mode.compact"))
+          .setValue(this.plugin.settings.sidebarDisplayMode)
+          .onChange(async (value) => {
+            this.plugin.settings.sidebarDisplayMode = value as SidebarDisplayMode;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName(this.plugin.t("settings.showResolvedComments.name"))
+      .setDesc(this.plugin.t("settings.showResolvedComments.desc"))
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.showResolvedComments)
+          .onChange(async (value) => {
+            this.plugin.settings.showResolvedComments = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName(this.plugin.t("settings.cachedDocuments.name"))
+      .setDesc(this.plugin.t("settings.cachedDocuments.desc"))
       .addText((text) =>
         text
           .setPlaceholder("100")
@@ -53,8 +80,8 @@ export class SideCommentsSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Anchor recovery delay")
-      .setDesc("Debounce delay in milliseconds before trying to relocate annotations after document changes.")
+      .setName(this.plugin.t("settings.anchorDelay.name"))
+      .setDesc(this.plugin.t("settings.anchorDelay.desc"))
       .addText((text) =>
         text
           .setPlaceholder("800")
@@ -69,12 +96,11 @@ export class SideCommentsSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Data directory")
-      .setDesc("Read-only in the MVP.")
+      .setName(this.plugin.t("settings.dataDir.name"))
+      .setDesc(this.plugin.t("settings.dataDir.desc"))
       .addText((text) => {
         text.setValue(this.plugin.settings.dataDir);
         text.inputEl.disabled = true;
       });
   }
 }
-

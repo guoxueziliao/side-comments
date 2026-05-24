@@ -4,6 +4,7 @@ import { relocateComment } from "../anchor/relocate";
 import {
   type AnchorSourceMode,
   CURRENT_SCHEMA_VERSION,
+  type RecentPreviewItem,
   type CommentCreateInput,
   type CommentUpdateInput,
   type PluginSettings,
@@ -31,7 +32,7 @@ export interface UpsertCommentResult {
 
 export class SidecarStore {
   private cache: LruCache<string, SideCommentDocument>;
-  private pluginVersion = "0.2.0";
+  private pluginVersion = "0.4.0";
 
   constructor(private readonly app: App, private settings: PluginSettings) {
     this.cache = new LruCache(settings.maxCachedDocuments);
@@ -310,6 +311,28 @@ export class SidecarStore {
     return this.cache.get(normalizeVaultRelativePath(filePath));
   }
 
+  async loadRecentPreviews(): Promise<{ state: "ready" | "missing" | "failed"; items: RecentPreviewItem[] }> {
+    const recentPath = getRecentPreviewPath(this.settings.dataDir);
+    if (!(await this.app.vault.adapter.exists(recentPath))) {
+      return { state: "missing", items: [] };
+    }
+
+    try {
+      const raw = await this.app.vault.adapter.read(recentPath);
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) {
+        return { state: "failed", items: [] };
+      }
+
+      return {
+        state: "ready",
+        items: parsed.flatMap((item) => normalizeRecentPreviewItem(item)).slice(0, this.settings.maxCachedDocuments)
+      };
+    } catch {
+      return { state: "failed", items: [] };
+    }
+  }
+
   private async createEmptyDocument(filePath: string): Promise<SideCommentDocument> {
     return {
       schemaVersion: CURRENT_SCHEMA_VERSION,
@@ -351,7 +374,7 @@ export class SidecarStore {
     const next = [
       preview,
       ...items.filter((item) => typeof item === "object" && item !== null && (item as { filePath?: string }).filePath !== document.filePath)
-    ].slice(0, 100);
+    ].slice(0, this.settings.maxCachedDocuments);
 
     await this.app.vault.adapter.write(recentPath, JSON.stringify(next, null, 2));
   }
@@ -367,4 +390,70 @@ export class SidecarStore {
       }
     }
   }
+}
+
+function normalizeRecentPreviewItem(value: unknown): RecentPreviewItem[] {
+  if (typeof value !== "object" || value === null) {
+    return [];
+  }
+
+  const raw = value as Record<string, unknown>;
+  if (typeof raw.filePath !== "string" || typeof raw.commentCount !== "number" || typeof raw.updatedAt !== "string") {
+    return [];
+  }
+
+  const preview = Array.isArray(raw.preview)
+    ? raw.preview.flatMap((entry) => normalizeRecentPreviewComment(entry))
+    : [];
+
+  return [
+    {
+      filePath: raw.filePath,
+      commentCount: raw.commentCount,
+      updatedAt: raw.updatedAt,
+      preview
+    }
+  ];
+}
+
+function normalizeRecentPreviewComment(value: unknown): RecentPreviewItem["preview"][number][] {
+  if (typeof value !== "object" || value === null) {
+    return [];
+  }
+
+  const raw = value as Record<string, unknown>;
+  if (
+    typeof raw.id !== "string" ||
+    typeof raw.selectedTextPreview !== "string" ||
+    typeof raw.notePreview !== "string" ||
+    typeof raw.markType !== "string" ||
+    typeof raw.color !== "string"
+  ) {
+    return [];
+  }
+
+  const status = raw.status === "resolved" || raw.status === "orphaned" ? raw.status : "active";
+  if (raw.markType !== "highlight" && raw.markType !== "underline" && raw.markType !== "strikethrough") {
+    return [];
+  }
+  if (
+    raw.color !== "yellow" &&
+    raw.color !== "blue" &&
+    raw.color !== "red" &&
+    raw.color !== "green" &&
+    raw.color !== "purple"
+  ) {
+    return [];
+  }
+
+  return [
+    {
+      id: raw.id,
+      selectedTextPreview: raw.selectedTextPreview,
+      notePreview: raw.notePreview,
+      markType: raw.markType,
+      color: raw.color,
+      status
+    }
+  ];
 }

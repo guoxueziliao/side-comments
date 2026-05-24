@@ -63,9 +63,26 @@ For large vaults, sidebar preference data must not grow linearly with the number
 
 These settings are plugin-level UI preferences. They should not require a sidecar schema change or historical comment migration.
 
+## Settings Entry Points
+
+Provide two entry points for these preferences:
+
+- sidebar top controls;
+- plugin settings tab.
+
+Sidebar controls should allow quick switching while reviewing comments:
+
+- normal or compact mode;
+- show or hide resolved comments.
+
+The plugin settings tab should expose the same preferences as default sidebar behavior.
+
+Both entry points should write to the same global plugin settings. There should not be separate sidebar-only state and settings-page state for these preferences.
+
 ## Acceptance Criteria
 
 - Compact mode makes dense notes easier to scan.
 - Compact mode keeps essential actions available without showing full card details.
 - Sidebar display preferences are stored globally and do not grow with vault size.
 - Display mode settings do not require sidecar schema changes.
+- Sidebar controls and the settings tab control the same global preferences.

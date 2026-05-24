@@ -31,7 +31,7 @@ export function createSideCommentsEditorExtension(plugin: SideCommentsPlugin): E
       private buildDecorations(): DecorationSet {
         const filePath = this.getFilePath();
         const document = plugin.currentDocument;
-        if (!filePath || !document || normalizeVaultRelativePath(filePath) !== document.filePath) {
+        if (plugin.areAnnotationMarksHidden() || !filePath || !document || normalizeVaultRelativePath(filePath) !== document.filePath) {
           return Decoration.none;
         }
 
@@ -57,7 +57,7 @@ export function createSideCommentsEditorExtension(plugin: SideCommentsPlugin): E
             class: getMarkClassNames(comment).join(" "),
             attributes: {
               "data-side-comments-id": comment.id,
-              title: "View comment"
+              title: plugin.t("marks.viewComment")
             }
           }));
         }

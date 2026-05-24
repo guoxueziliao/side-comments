@@ -5,7 +5,7 @@ import { TOOLBAR_ACTIONS, type SelectionToolbarAction } from "../editor/selectio
 export function registerSideCommentCommands(plugin: SideCommentsPlugin): void {
   plugin.addCommand({
     id: "open-side-comments",
-    name: "Open side comments panel",
+    name: plugin.t("command.openSidebar"),
     callback: () => {
       void plugin.activateSidebar();
     }
@@ -14,7 +14,7 @@ export function registerSideCommentCommands(plugin: SideCommentsPlugin): void {
   for (const action of TOOLBAR_ACTIONS) {
     plugin.addCommand({
       id: `add-${action.id}`,
-      name: `Add ${action.title.toLowerCase()} to current selection`,
+      name: plugin.t("command.addSelection", { label: plugin.t(action.titleKey).toLowerCase() }),
       editorCallback: (editor: Editor, ctx: MarkdownFileInfo) => {
         void createFromEditor(plugin, editor, ctx, action);
       }
@@ -23,16 +23,32 @@ export function registerSideCommentCommands(plugin: SideCommentsPlugin): void {
 
   plugin.addCommand({
     id: "load-current-sidecar",
-    name: "Load current document sidecar",
+    name: plugin.t("command.loadCurrentSidecar"),
     callback: async () => {
       const file = plugin.getActiveMarkdownFile();
       if (!file) {
-        new Notice("Open a Markdown file first.");
+        new Notice(plugin.t("notice.openMarkdownFirst"));
         return;
       }
 
       await plugin.loadForFile(file);
-      new Notice("Side Comments sidecar loaded.");
+      new Notice(plugin.t("notice.sidecarLoaded"));
+    }
+  });
+
+  plugin.addCommand({
+    id: "toggle-annotation-marks",
+    name: plugin.t("command.toggleMarks"),
+    callback: () => {
+      plugin.toggleAnnotationMarksHidden();
+    }
+  });
+
+  plugin.addCommand({
+    id: "open-annotation-overview",
+    name: plugin.t("crossNote.open"),
+    callback: () => {
+      void plugin.activateCrossNoteReview();
     }
   });
 }

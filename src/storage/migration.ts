@@ -168,13 +168,23 @@ function normalizeAnchorSource(value: unknown): SideComment["anchor"]["source"] 
 
 export function sortComments(comments: SideComment[]): SideComment[] {
   return [...comments].sort((left, right) => {
-    if (left.status === "orphaned" && right.status !== "orphaned") {
-      return 1;
+    const startDiff = left.anchor.startOffset - right.anchor.startOffset;
+    if (startDiff !== 0) {
+      return startDiff;
     }
-    if (right.status === "orphaned" && left.status !== "orphaned") {
+
+    const endDiff = left.anchor.endOffset - right.anchor.endOffset;
+    if (endDiff !== 0) {
+      return endDiff;
+    }
+
+    if (left.id < right.id) {
       return -1;
     }
-    return left.anchor.startOffset - right.anchor.startOffset;
+    if (left.id > right.id) {
+      return 1;
+    }
+    return 0;
   });
 }
 

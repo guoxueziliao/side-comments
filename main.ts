@@ -6,7 +6,8 @@ import {
   Notice,
   Plugin,
   TFile,
-  WorkspaceLeaf
+  WorkspaceLeaf,
+  getLanguage
 } from "obsidian";
 import type { EditorView } from "@codemirror/view";
 import { registerSideCommentCommands } from "./src/commands/commands";
@@ -18,27 +19,34 @@ import { SideCommentsSettingTab } from "./src/settings/settingsTab";
 import { SidecarStore } from "./src/storage/sidecarStore";
 import { normalizeVaultRelativePath } from "./src/storage/pathHash";
 import { SideCommentsSidebarView, SIDE_COMMENTS_VIEW_TYPE } from "./src/views/sidebarView";
+import { SideCommentsCrossNoteView, SIDE_COMMENTS_CROSS_NOTE_VIEW_TYPE } from "./src/views/crossNoteView";
+import { createTranslator, type Translator } from "./src/i18n";
 import type { AnchorSourceMode, CommentUpdateInput, PluginSettings, SideComment, SideCommentDocument } from "./src/types";
 
 type CurrentDocumentLoadState = "none" | "ready" | "failed";
 
 export default class SideCommentsPlugin extends Plugin {
   settings: PluginSettings = DEFAULT_SETTINGS;
+  t: Translator = createTranslator();
   store!: SidecarStore;
   currentDocument: SideCommentDocument | null = null;
   currentDocumentLoadState: CurrentDocumentLoadState = "none";
   private readonly modifyTimers = new Map<string, number>();
   private selectionToolbar: SelectionToolbar | null = null;
   private readonly selectionHandler = () => this.syncSelectionToolbar();
+  private documentFlashTimer: number | null = null;
+  private readonly documentFlashElements = new Set<HTMLElement>();
+  private annotationMarksHidden = false;
 
   async onload(): Promise<void> {
     this.settings = await loadSideCommentsSettings(this);
+    this.t = createTranslator(getLanguage());
     this.store = new SidecarStore(this.app, this.settings);
     await this.store.ensureManifest(this.manifest.version);
 
     this.selectionToolbar = new SelectionToolbar(document.body, (action) => {
       void this.handleSelectionAction(action);
-    });
+    }, this.t);
 
     this.registerEditorExtension(createSideCommentsEditorExtension(this));
     this.registerMarkdownPostProcessor((el, ctx) => {
@@ -49,10 +57,14 @@ export default class SideCommentsPlugin extends Plugin {
       SIDE_COMMENTS_VIEW_TYPE,
       (leaf: WorkspaceLeaf) => new SideCommentsSidebarView(leaf, this)
     );
+    this.registerView(
+      SIDE_COMMENTS_CROSS_NOTE_VIEW_TYPE,
+      (leaf: WorkspaceLeaf) => new SideCommentsCrossNoteView(leaf, this)
+    );
 
     registerSideCommentCommands(this);
     this.addSettingTab(new SideCommentsSettingTab(this.app, this));
-    this.addRibbonIcon("message-square-text", "Open side comments", () => {
+    this.addRibbonIcon("message-square-text", this.t("command.openSidebar"), () => {
       void this.activateSidebar();
     });
 
@@ -89,9 +101,11 @@ export default class SideCommentsPlugin extends Plugin {
       window.clearTimeout(timer);
     }
     this.modifyTimers.clear();
+    this.clearDocumentFlash();
     this.selectionToolbar?.destroy();
     this.selectionToolbar = null;
     this.app.workspace.detachLeavesOfType(SIDE_COMMENTS_VIEW_TYPE);
+    this.app.workspace.detachLeavesOfType(SIDE_COMMENTS_CROSS_NOTE_VIEW_TYPE);
   }
 
   async saveSettings(): Promise<void> {
@@ -115,6 +129,17 @@ export default class SideCommentsPlugin extends Plugin {
     void this.refreshSidebar();
   }
 
+  areAnnotationMarksHidden(): boolean {
+    return this.annotationMarksHidden;
+  }
+
+  toggleAnnotationMarksHidden(): void {
+    this.annotationMarksHidden = !this.annotationMarksHidden;
+    this.selectionToolbar?.hide();
+    this.refreshAllViews();
+    new Notice(this.annotationMarksHidden ? this.t("marks.hiddenNotice") : this.t("marks.visibleNotice"));
+  }
+
   async activateSidebar(): Promise<void> {
     const leaves = this.app.workspace.getLeavesOfType(SIDE_COMMENTS_VIEW_TYPE);
     let leaf: WorkspaceLeaf | null = leaves[0] ?? null;
@@ -122,7 +147,7 @@ export default class SideCommentsPlugin extends Plugin {
     if (!leaf) {
       leaf = this.app.workspace.getRightLeaf(false);
       if (!leaf) {
-        new Notice("Could not open Side Comments view.");
+        new Notice(this.t("notice.openSidebarFailed"));
         return;
       }
       await leaf.setViewState({ type: SIDE_COMMENTS_VIEW_TYPE, active: true });
@@ -130,6 +155,26 @@ export default class SideCommentsPlugin extends Plugin {
 
     this.app.workspace.revealLeaf(leaf);
     await this.refreshSidebar();
+  }
+
+  async activateCrossNoteReview(): Promise<void> {
+    const leaves = this.app.workspace.getLeavesOfType(SIDE_COMMENTS_CROSS_NOTE_VIEW_TYPE);
+    let leaf: WorkspaceLeaf | null = leaves[0] ?? null;
+
+    if (!leaf) {
+      leaf = this.app.workspace.getRightLeaf(false);
+      if (!leaf) {
+        new Notice(this.t("notice.openSidebarFailed"));
+        return;
+      }
+      await leaf.setViewState({ type: SIDE_COMMENTS_CROSS_NOTE_VIEW_TYPE, active: true });
+    }
+
+    this.app.workspace.revealLeaf(leaf);
+    const view = leaf.view;
+    if (view instanceof SideCommentsCrossNoteView) {
+      await view.refresh();
+    }
   }
 
   async loadForFile(file: TFile | null): Promise<void> {
@@ -149,7 +194,7 @@ export default class SideCommentsPlugin extends Plugin {
       console.error("Side Comments failed to load sidecar", error);
       this.currentDocument = null;
       this.currentDocumentLoadState = "failed";
-      new Notice("Side Comments: failed to load annotation data.");
+      new Notice(this.t("notice.loadFailed"));
     }
 
     this.refreshAllViews();
@@ -158,8 +203,12 @@ export default class SideCommentsPlugin extends Plugin {
   async createAnnotationFromEditorView(view: EditorView, action: SelectionToolbarAction): Promise<void> {
     const info = view.state.field(editorInfoField, false);
     const file = info?.file;
+    if (this.annotationMarksHidden) {
+      new Notice(this.t("marks.createDisabled"));
+      return;
+    }
     if (!file) {
-      new Notice("Open a Markdown file first.");
+      new Notice(this.t("notice.openMarkdownFirst"));
       return;
     }
 
@@ -179,13 +228,18 @@ export default class SideCommentsPlugin extends Plugin {
   }
 
   async createAnnotationFromObsidianEditor(editor: Editor, file: TFile | null, action: SelectionToolbarAction): Promise<void> {
+    if (this.annotationMarksHidden) {
+      new Notice(this.t("marks.createDisabled"));
+      return;
+    }
+
     if (!file) {
-      new Notice("Open a Markdown file first.");
+      new Notice(this.t("notice.openMarkdownFirst"));
       return;
     }
 
     if (!editor.somethingSelected()) {
-      new Notice("Select text first.");
+      new Notice(this.t("notice.selectTextFirst"));
       return;
     }
 
@@ -220,7 +274,7 @@ export default class SideCommentsPlugin extends Plugin {
     const selectedText = selection.toString();
     const match = findSelectedTextInSource(sourceText, selectedText);
     if (!match) {
-      new Notice("Side Comments: could not map the selected preview text to Markdown source.");
+      new Notice(this.t("notice.mapSelectionFailed"));
       return;
     }
 
@@ -229,6 +283,11 @@ export default class SideCommentsPlugin extends Plugin {
 
   private syncSelectionToolbar(): void {
     if (!this.selectionToolbar) {
+      return;
+    }
+
+    if (this.annotationMarksHidden) {
+      this.selectionToolbar.hide();
       return;
     }
 
@@ -308,8 +367,8 @@ export default class SideCommentsPlugin extends Plugin {
   } | null {
     const document = this.requireCurrentDocument();
     const view = this.findMarkdownViewForPath(document.filePath);
-    const noSelectionMessage = action === "bind" ? "请先在当前文档中选中要绑定的文字" : "请先在当前文档中选中要调整的文字";
-    const unsupportedMessage = action === "bind" ? "当前选区暂不支持绑定" : "当前选区暂不支持调整";
+    const noSelectionMessage = action === "bind" ? this.t("notice.rebindSelect") : this.t("notice.adjustSelect");
+    const unsupportedMessage = action === "bind" ? this.t("notice.rebindUnsupported") : this.t("notice.adjustUnsupported");
 
     if (!view?.file || normalizeVaultRelativePath(view.file.path) !== document.filePath) {
       new Notice(noSelectionMessage);
@@ -417,7 +476,7 @@ export default class SideCommentsPlugin extends Plugin {
       }
     } catch (error) {
       console.error("Side Comments failed to create annotation", error);
-      new Notice("Side Comments: failed to create annotation.");
+      new Notice(this.t("notice.createFailed"));
     }
   }
 
@@ -460,7 +519,7 @@ export default class SideCommentsPlugin extends Plugin {
       );
     } catch (error) {
       console.error("Side Comments failed to rebind comment", error);
-      new Notice("当前选区暂不支持绑定");
+      new Notice(this.t("notice.rebindUnsupported"));
       return null;
     }
   }
@@ -488,7 +547,7 @@ export default class SideCommentsPlugin extends Plugin {
       );
     } catch (error) {
       console.error("Side Comments failed to adjust comment range", error);
-      new Notice("当前选区暂不支持调整");
+      new Notice(this.t("notice.adjustUnsupported"));
       return null;
     }
   }
@@ -500,6 +559,28 @@ export default class SideCommentsPlugin extends Plugin {
     }
   }
 
+  async openSourceDocument(filePath: string): Promise<TFile | null> {
+    const file = this.app.vault.getAbstractFileByPath(filePath);
+    if (!(file instanceof TFile)) {
+      new Notice(this.t("notice.sourceOpenFailed"));
+      return null;
+    }
+
+    await this.app.workspace.getLeaf(false).openFile(file);
+    await this.loadForFile(file);
+    return file;
+  }
+
+  async openSourceComment(filePath: string, commentId: string): Promise<void> {
+    const file = await this.openSourceDocument(filePath);
+    if (!file) {
+      return;
+    }
+
+    await this.focusCommentInSidebar(commentId, false);
+    await this.jumpToCommentInEditor(commentId);
+  }
+
   async jumpToCommentInEditor(commentId: string): Promise<void> {
     const document = this.requireCurrentDocument();
     const comment = document.comments.find((item) => item.id === commentId);
@@ -507,7 +588,7 @@ export default class SideCommentsPlugin extends Plugin {
       return;
     }
     if (comment.status === "orphaned") {
-      new Notice("原文失联，无法跳转。");
+      new Notice(this.t("notice.orphanJumpFailed"));
       return;
     }
 
@@ -521,7 +602,7 @@ export default class SideCommentsPlugin extends Plugin {
     }
 
     if (!view) {
-      new Notice("Could not open source note.");
+      new Notice(this.t("notice.sourceOpenFailed"));
       return;
     }
 
@@ -530,6 +611,7 @@ export default class SideCommentsPlugin extends Plugin {
     view.editor.setSelection(from, to);
     view.editor.scrollIntoView({ from, to }, true);
     view.editor.focus();
+    this.flashDocumentTarget(commentId);
   }
 
   async refreshSidebar(): Promise<void> {
@@ -594,6 +676,34 @@ export default class SideCommentsPlugin extends Plugin {
     }
   }
 
+  private flashDocumentTarget(commentId: string): void {
+    this.clearDocumentFlash();
+    requestAnimationFrame(() => {
+      const selector = `[data-side-comments-id="${CSS.escape(commentId)}"]`;
+      const marks = Array.from(document.querySelectorAll<HTMLElement>(selector));
+      for (const mark of marks) {
+        mark.addClass("side-comments-temporary-target");
+        this.documentFlashElements.add(mark);
+      }
+
+      this.documentFlashTimer = window.setTimeout(() => {
+        this.clearDocumentFlash();
+      }, 2000);
+    });
+  }
+
+  private clearDocumentFlash(): void {
+    if (this.documentFlashTimer !== null) {
+      window.clearTimeout(this.documentFlashTimer);
+      this.documentFlashTimer = null;
+    }
+
+    for (const element of this.documentFlashElements) {
+      element.removeClass("side-comments-temporary-target");
+    }
+    this.documentFlashElements.clear();
+  }
+
   private async renderReadingView(el: HTMLElement, ctx: MarkdownPostProcessorContext): Promise<void> {
     try {
       const normalizedPath = normalizeVaultRelativePath(ctx.sourcePath);
@@ -601,8 +711,9 @@ export default class SideCommentsPlugin extends Plugin {
         this.currentDocument?.filePath === normalizedPath
           ? this.currentDocument
           : await this.store.loadDocument(normalizedPath);
+      const sectionInfo = ctx.getSectionInfo(el);
 
-      const comments = document.comments.filter((comment) => {
+      const comments = this.annotationMarksHidden ? [] : document.comments.filter((comment) => {
         if (comment.status === "resolved" && !this.settings.showResolvedMarks) {
           return false;
         }
@@ -610,6 +721,14 @@ export default class SideCommentsPlugin extends Plugin {
       });
 
       renderReadingViewMarks(el, comments, {
+        sectionInfo: sectionInfo
+          ? {
+              text: sectionInfo.text,
+              lineStart: sectionInfo.lineStart,
+              lineEnd: sectionInfo.lineEnd
+            }
+          : undefined,
+        commentTitle: this.t("marks.viewComment"),
         onCommentClick: (commentId) => {
           void this.focusCommentInSidebar(commentId, false);
         }

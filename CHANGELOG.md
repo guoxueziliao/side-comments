@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.0
+
+- Added bilingual UI infrastructure.
+- Added temporary hide/show annotation marks.
+- Added a read-only cross-note annotation overview page.
+- Improved zoom and narrow-pane layout behavior.
+- Hardened repeated-text anchor rendering.
+
+## 0.3.0
+
+- Added normal and compact sidebar display modes.
+- Added current-document combined filters.
+- Improved resolved and orphaned comment card workflows.
+- Added document-to-card and card-to-document navigation refinements.
+
 ## 0.2.0
 
 - Added richer anchor metadata for new and refreshed comments.

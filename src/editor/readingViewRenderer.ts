@@ -2,6 +2,12 @@ import type { SideComment } from "../types";
 import { getMarkClassNames } from "./markDecorations";
 
 export interface ReadingViewRenderOptions {
+  sectionInfo?: {
+    text: string;
+    lineStart: number;
+    lineEnd: number;
+  };
+  commentTitle?: string;
   onCommentClick?: (commentId: string) => void;
 }
 
@@ -26,7 +32,7 @@ export function renderReadingViewMarks(
   clearReadingViewMarks(container);
 
   const renderedComments = comments
-    .filter((comment) => comment.status !== "orphaned")
+    .filter((comment) => comment.status !== "orphaned" && isCommentInSection(comment, options.sectionInfo))
     .sort((left, right) => right.anchor.startOffset - left.anchor.startOffset);
 
   for (const comment of renderedComments) {
@@ -40,8 +46,8 @@ function wrapComment(container: HTMLElement, comment: SideComment, options: Read
     return;
   }
 
-  const preferredIndex = Math.max(0, Math.min(comment.anchor.startOffset, fullText.length));
-  const index = locateText(fullText, comment.anchor.selectedText, preferredIndex);
+  const preferredIndex = getSectionRelativePreferredIndex(comment, options.sectionInfo);
+  const index = locateText(fullText, comment.anchor.selectedText, preferredIndex, options.sectionInfo?.text);
   if (index < 0) {
     return;
   }
@@ -55,7 +61,7 @@ function wrapComment(container: HTMLElement, comment: SideComment, options: Read
   wrapper.className = [...getMarkClassNames(comment), "side-comments-reading-view-mark"].join(" ");
   wrapper.dataset.sideCommentsId = comment.id;
   wrapper.dataset.sideCommentsReadingView = "true";
-  wrapper.title = "View comment";
+  wrapper.title = options.commentTitle ?? "";
 
   const handleClick = (event: MouseEvent) => {
     event.preventDefault();
@@ -69,12 +75,134 @@ function wrapComment(container: HTMLElement, comment: SideComment, options: Read
   range.insertNode(wrapper);
 }
 
-function locateText(source: string, target: string, preferredIndex: number): number {
-  const preferred = source.indexOf(target, preferredIndex);
-  if (preferred >= 0) {
-    return preferred;
+function isCommentInSection(
+  comment: SideComment,
+  sectionInfo: ReadingViewRenderOptions["sectionInfo"]
+): boolean {
+  if (!sectionInfo) {
+    return true;
   }
+
+  const position = comment.anchor.position;
+  if (!position) {
+    return sectionInfo.text.includes(comment.anchor.selectedText);
+  }
+
+  const anchorStartLine = position.lineStart - 1;
+  const anchorEndLine = position.lineEnd - 1;
+  return anchorStartLine <= sectionInfo.lineEnd && anchorEndLine >= sectionInfo.lineStart;
+}
+
+function getSectionRelativePreferredIndex(
+  comment: SideComment,
+  sectionInfo: ReadingViewRenderOptions["sectionInfo"]
+): number | undefined {
+  const position = comment.anchor.position;
+  if (!position || !sectionInfo) {
+    return undefined;
+  }
+
+  const relativeLine = position.lineStart - 1 - sectionInfo.lineStart;
+  if (relativeLine < 0) {
+    return undefined;
+  }
+
+  const lines = sectionInfo.text.split("\n");
+  if (relativeLine >= lines.length) {
+    return undefined;
+  }
+
+  let offset = 0;
+  for (let index = 0; index < relativeLine; index += 1) {
+    offset += lines[index].length + 1;
+  }
+
+  return Math.max(0, offset + position.columnStart - 1);
+}
+
+function locateText(source: string, target: string, preferredIndex?: number, sourceSection?: string): number {
+  if (!target) {
+    return -1;
+  }
+
+  if (sourceSection && preferredIndex !== undefined) {
+    const sourceIndex = findClosestTextMatch(sourceSection, target, preferredIndex);
+    const occurrence = sourceIndex >= 0 ? getOccurrenceIndex(sourceSection, target, sourceIndex) : -1;
+    const renderedIndex = occurrence >= 0 ? findOccurrence(source, target, occurrence) : -1;
+    if (renderedIndex >= 0) {
+      return renderedIndex;
+    }
+  }
+
+  if (preferredIndex !== undefined) {
+    const preferred = source.indexOf(target, preferredIndex);
+    if (preferred >= 0) {
+      return preferred;
+    }
+  }
+
   return source.indexOf(target);
+}
+
+function findClosestTextMatch(source: string, target: string, preferredIndex: number): number {
+  let bestIndex = -1;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  let searchFrom = 0;
+
+  while (searchFrom <= source.length) {
+    const index = source.indexOf(target, searchFrom);
+    if (index < 0) {
+      break;
+    }
+
+    const distance = Math.abs(index - preferredIndex);
+    if (distance < bestDistance) {
+      bestIndex = index;
+      bestDistance = distance;
+    }
+
+    searchFrom = index + Math.max(1, target.length);
+  }
+
+  return bestIndex;
+}
+
+function getOccurrenceIndex(source: string, target: string, targetIndex: number): number {
+  let occurrence = 0;
+  let searchFrom = 0;
+
+  while (searchFrom <= source.length) {
+    const index = source.indexOf(target, searchFrom);
+    if (index < 0) {
+      return -1;
+    }
+    if (index === targetIndex) {
+      return occurrence;
+    }
+    occurrence += 1;
+    searchFrom = index + Math.max(1, target.length);
+  }
+
+  return -1;
+}
+
+function findOccurrence(source: string, target: string, occurrence: number): number {
+  let current = 0;
+  let searchFrom = 0;
+
+  while (searchFrom <= source.length) {
+    const index = source.indexOf(target, searchFrom);
+    if (index < 0) {
+      return -1;
+    }
+    if (current === occurrence) {
+      return index;
+    }
+    current += 1;
+    searchFrom = index + Math.max(1, target.length);
+  }
+
+  return -1;
 }
 
 function buildRange(root: HTMLElement, startOffset: number, endOffset: number): Range | null {

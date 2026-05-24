@@ -4,8 +4,8 @@ Status: Confirmed
 
 ## Version
 
-- Current development version: `0.2.0`
-- Current published release: `0.1.1`
+- Current development version: `0.3.0`
+- Current published release: `0.2.0`
 - Repository: `guoxueziliao/side-comments`
 - Local development path: `/home/fan/obsidian插件`
 - Local test install path: `C:\Users\FAN\Desktop\全域智库\.obsidian\plugins\side-comments`

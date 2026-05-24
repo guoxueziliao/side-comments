@@ -1,18 +1,19 @@
 import type { MarkColor, MarkType, SelectionAction } from "../types";
+import type { Translator } from "../i18n";
 
 export interface SelectionToolbarAction {
   id: SelectionAction;
   type: MarkType;
   color: MarkColor;
-  title: string;
-  shortLabel: string;
+  titleKey: "toolbar.highlight" | "toolbar.underline" | "toolbar.strikethrough" | "toolbar.comment";
+  shortLabelKey: "toolbar.highlight.short" | "toolbar.underline.short" | "toolbar.strikethrough.short" | "toolbar.comment.short";
 }
 
 export const TOOLBAR_ACTIONS: SelectionToolbarAction[] = [
-  { id: "highlight", type: "highlight", color: "yellow", title: "高亮", shortLabel: "高" },
-  { id: "underline", type: "underline", color: "blue", title: "下划线", shortLabel: "下" },
-  { id: "strikethrough", type: "strikethrough", color: "red", title: "删除线", shortLabel: "删" },
-  { id: "comment", type: "highlight", color: "purple", title: "评论", shortLabel: "注" }
+  { id: "highlight", type: "highlight", color: "yellow", titleKey: "toolbar.highlight", shortLabelKey: "toolbar.highlight.short" },
+  { id: "underline", type: "underline", color: "blue", titleKey: "toolbar.underline", shortLabelKey: "toolbar.underline.short" },
+  { id: "strikethrough", type: "strikethrough", color: "red", titleKey: "toolbar.strikethrough", shortLabelKey: "toolbar.strikethrough.short" },
+  { id: "comment", type: "highlight", color: "purple", titleKey: "toolbar.comment", shortLabelKey: "toolbar.comment.short" }
 ];
 
 export class SelectionToolbar {
@@ -20,7 +21,8 @@ export class SelectionToolbar {
 
   constructor(
     private readonly host: HTMLElement,
-    private readonly onAction: (action: SelectionToolbarAction) => void
+    private readonly onAction: (action: SelectionToolbarAction) => void,
+    private readonly t: Translator
   ) {
     const position = getComputedStyle(host).position;
     if (position === "static") {
@@ -32,15 +34,17 @@ export class SelectionToolbar {
     this.root.style.display = "none";
 
     for (const action of TOOLBAR_ACTIONS) {
+      const title = this.t(action.titleKey);
+      const shortLabel = this.t(action.shortLabelKey);
       const button = this.root.createEl("button", {
         cls: "side-comments-toolbar-button",
         attr: {
           type: "button",
-          title: action.title,
-          "aria-label": action.title
+          title,
+          "aria-label": title
         }
       });
-      button.createSpan({ cls: "side-comments-toolbar-button-label", text: action.shortLabel });
+      button.createSpan({ cls: "side-comments-toolbar-button-label", text: shortLabel });
       button.addEventListener("mousedown", (event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -55,12 +59,14 @@ export class SelectionToolbar {
   }
 
   show(anchor: { left: number; top: number }): void {
-    const left = Math.max(8, anchor.left);
-    const top = Math.max(8, anchor.top - 42);
+    this.root.style.display = "flex";
+    const width = this.root.offsetWidth;
+    const height = this.root.offsetHeight;
+    const left = clamp(anchor.left - width / 2, 8, window.innerWidth - width - 8);
+    const top = clamp(anchor.top - height - 8, 8, window.innerHeight - height - 8);
 
     this.root.style.left = `${left}px`;
     this.root.style.top = `${top}px`;
-    this.root.style.display = "flex";
   }
 
   hide(): void {
@@ -70,4 +76,8 @@ export class SelectionToolbar {
   destroy(): void {
     this.root.remove();
   }
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(value, Math.max(min, max)));
 }

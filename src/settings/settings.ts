@@ -4,6 +4,8 @@ import { DATA_DIR, type PluginSettings } from "../types";
 export const DEFAULT_SETTINGS: PluginSettings = {
   autoOpenSidebarAfterCreate: true,
   showResolvedMarks: true,
+  showResolvedComments: true,
+  sidebarDisplayMode: "normal",
   maxCachedDocuments: 100,
   relocateDebounceMs: 800,
   dataDir: DATA_DIR
@@ -24,4 +26,3 @@ export async function saveSideCommentsSettings(plugin: Plugin, settings: PluginS
     dataDir: DATA_DIR
   });
 }
-

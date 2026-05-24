@@ -10,8 +10,8 @@ export function createRecentPreview(document: SideCommentDocument, maxItems = 5)
       selectedTextPreview: comment.anchor.selectedText.slice(0, 120),
       notePreview: comment.note.content.slice(0, 120),
       markType: comment.mark.type,
-      color: comment.mark.color
+      color: comment.mark.color,
+      status: comment.status
     }))
   };
 }
-

@@ -1,20 +1,29 @@
-import { ItemView, Notice, WorkspaceLeaf } from "obsidian";
+import { ItemView, WorkspaceLeaf } from "obsidian";
 import type SideCommentsPlugin from "../../main";
 import { sortComments } from "../storage/migration";
-import type { CommentDraft, CommentQuery, MarkFilter, StatusFilter, SideComment } from "../types";
-import { EMPTY_STATES } from "./emptyStates";
+import type {
+  ColorFilter,
+  CommentDraft,
+  MarkFilter,
+  SidebarDisplayMode,
+  StatusFilter,
+  SideComment
+} from "../types";
 import { renderCommentCard } from "./commentCard";
 
 export const SIDE_COMMENTS_VIEW_TYPE = "side-comments-view";
 
 export class SideCommentsSidebarView extends ItemView {
   private readonly collapsedCommentIds = new Set<string>();
+  private readonly expandedCompactCommentIds = new Set<string>();
+  private readonly expandedResolvedCommentIds = new Set<string>();
   private readonly drafts = new Map<string, CommentDraft>();
   private focusedCommentId: string | null = null;
   private editingCommentId: string | null = null;
   private flashTimer: number | null = null;
   private searchQuery = "";
   private markFilter: MarkFilter = "all";
+  private colorFilter: ColorFilter = "all";
   private statusFilter: StatusFilter = "all";
 
   constructor(leaf: WorkspaceLeaf, private readonly plugin: SideCommentsPlugin) {
@@ -54,18 +63,37 @@ export class SideCommentsSidebarView extends ItemView {
     void this.render();
   }
 
+  setColorFilter(value: ColorFilter): void {
+    this.colorFilter = value;
+    void this.render();
+  }
+
   setStatusFilter(value: StatusFilter): void {
     this.statusFilter = value;
     void this.render();
   }
 
+  async setDisplayMode(value: SidebarDisplayMode): Promise<void> {
+    this.plugin.settings.sidebarDisplayMode = value;
+    await this.plugin.saveSettings();
+  }
+
+  async setShowResolvedComments(value: boolean): Promise<void> {
+    this.plugin.settings.showResolvedComments = value;
+    await this.plugin.saveSettings();
+  }
+
   focusComment(commentId: string, edit = false): void {
     this.focusedCommentId = commentId;
     this.collapsedCommentIds.delete(commentId);
+    this.expandedCompactCommentIds.add(commentId);
+    const comment = this.findComment(commentId);
+    if (comment?.status === "resolved") {
+      this.expandedResolvedCommentIds.add(commentId);
+    }
     if (edit) {
       this.editingCommentId = commentId;
       if (!this.drafts.has(commentId)) {
-        const comment = this.findComment(commentId);
         if (comment) {
           this.drafts.set(commentId, draftFromComment(comment));
         }
@@ -83,6 +111,10 @@ export class SideCommentsSidebarView extends ItemView {
     }
     this.editingCommentId = commentId;
     this.collapsedCommentIds.delete(commentId);
+    this.expandedCompactCommentIds.add(commentId);
+    if (comment.status === "resolved") {
+      this.expandedResolvedCommentIds.add(commentId);
+    }
     this.drafts.set(commentId, draftFromComment(comment));
     void this.render();
     this.scrollToComment(commentId);
@@ -121,18 +153,22 @@ export class SideCommentsSidebarView extends ItemView {
 
   async toggleStatus(commentId: string, nextStatus: SideComment["status"]): Promise<void> {
     const updated = await this.plugin.setCommentStatus(commentId, nextStatus);
+    this.expandedResolvedCommentIds.delete(commentId);
     this.plugin.setCurrentDocument(updated);
     this.plugin.refreshAllViews();
   }
 
   async deleteComment(commentId: string): Promise<void> {
-    const confirmed = window.confirm("删除这条批注？此操作不会修改正文，但会移除对应批注数据。");
+    const confirmed = window.confirm(this.plugin.t("card.deleteConfirm"));
     if (!confirmed) {
       return;
     }
 
     const updated = await this.plugin.deleteComment(commentId);
     this.drafts.delete(commentId);
+    this.collapsedCommentIds.delete(commentId);
+    this.expandedCompactCommentIds.delete(commentId);
+    this.expandedResolvedCommentIds.delete(commentId);
     if (this.editingCommentId === commentId) {
       this.editingCommentId = null;
     }
@@ -173,13 +209,41 @@ export class SideCommentsSidebarView extends ItemView {
     content.addClass("side-comments-sidebar");
 
     const header = content.createDiv({ cls: "side-comments-header" });
-    header.createDiv({ cls: "side-comments-title", text: "正文批注" });
+    header.createDiv({ cls: "side-comments-title", text: this.plugin.t("sidebar.title") });
+
+    const preferenceRow = header.createDiv({ cls: "side-comments-toolbar-row side-comments-toolbar-row--preferences" });
+    const modeGroup = preferenceRow.createDiv({ cls: "side-comments-segmented-control" });
+    for (const [value, label] of [
+      ["normal", this.plugin.t("sidebar.mode.normal")],
+      ["compact", this.plugin.t("sidebar.mode.compact")]
+    ] as const) {
+      createToolbarButton(modeGroup, label, this.plugin.t("sidebar.mode.switch", { label }), () => {
+        void this.setDisplayMode(value);
+      }, this.plugin.settings.sidebarDisplayMode === value);
+    }
+    createToolbarButton(
+      preferenceRow,
+      this.plugin.t("filter.status.resolved"),
+      this.plugin.settings.showResolvedComments ? this.plugin.t("sidebar.hideResolved") : this.plugin.t("sidebar.showResolved"),
+      () => {
+        void this.setShowResolvedComments(!this.plugin.settings.showResolvedComments);
+      },
+      this.plugin.settings.showResolvedComments
+    );
+    createToolbarButton(
+      preferenceRow,
+      this.plugin.areAnnotationMarksHidden() ? this.plugin.t("marks.show") : this.plugin.t("marks.hide"),
+      this.plugin.areAnnotationMarksHidden() ? this.plugin.t("marks.show") : this.plugin.t("marks.hide"),
+      () => {
+        this.plugin.toggleAnnotationMarksHidden();
+      }
+    );
 
     const searchRow = header.createDiv({ cls: "side-comments-toolbar-row" });
     const searchInput = searchRow.createEl("input", {
       attr: {
         type: "search",
-        placeholder: "搜索当前文档批注..."
+        placeholder: this.plugin.t("filter.search.placeholder")
       }
     });
     searchInput.value = this.searchQuery;
@@ -189,10 +253,11 @@ export class SideCommentsSidebarView extends ItemView {
 
     const markSelect = searchRow.createEl("select");
     for (const [value, label] of [
-      ["all", "类型：全部"],
-      ["highlight", "高亮"],
-      ["underline", "下划线"],
-      ["strikethrough", "删除线"]
+      ["all", this.plugin.t("filter.type.all")],
+      ["highlight", this.plugin.t("filter.type.highlight")],
+      ["underline", this.plugin.t("filter.type.underline")],
+      ["strikethrough", this.plugin.t("filter.type.strikethrough")],
+      ["comment", this.plugin.t("filter.type.comment")]
     ] as const) {
       const option = markSelect.createEl("option", { text: label });
       option.value = value;
@@ -202,12 +267,29 @@ export class SideCommentsSidebarView extends ItemView {
       this.setMarkFilter(markSelect.value as MarkFilter);
     });
 
+    const colorSelect = searchRow.createEl("select");
+    for (const [value, label] of [
+      ["all", this.plugin.t("filter.color.all")],
+      ["yellow", this.plugin.t("filter.color.yellow")],
+      ["blue", this.plugin.t("filter.color.blue")],
+      ["red", this.plugin.t("filter.color.red")],
+      ["green", this.plugin.t("filter.color.green")],
+      ["purple", this.plugin.t("filter.color.purple")]
+    ] as const) {
+      const option = colorSelect.createEl("option", { text: label });
+      option.value = value;
+    }
+    colorSelect.value = this.colorFilter;
+    colorSelect.addEventListener("change", () => {
+      this.setColorFilter(colorSelect.value as ColorFilter);
+    });
+
     const statusSelect = searchRow.createEl("select");
     for (const [value, label] of [
-      ["all", "状态：全部"],
-      ["active", "未处理"],
-      ["resolved", "已处理"],
-      ["orphaned", "已失联"]
+      ["all", this.plugin.t("filter.status.all")],
+      ["active", this.plugin.t("filter.status.active")],
+      ["resolved", this.plugin.t("filter.status.resolved")],
+      ["orphaned", this.plugin.t("filter.status.orphaned")]
     ] as const) {
       const option = statusSelect.createEl("option", { text: label });
       option.value = value;
@@ -217,43 +299,75 @@ export class SideCommentsSidebarView extends ItemView {
       this.setStatusFilter(statusSelect.value as StatusFilter);
     });
 
+    if (this.hasActiveFilters()) {
+      createToolbarButton(searchRow, this.plugin.t("filter.clear.short"), this.plugin.t("filter.clear"), () => {
+        this.clearFilters();
+      });
+    }
+
     const { document, state } = this.getDocumentState();
     if (state === "failed") {
-      header.createDiv({ cls: "side-comments-subtitle", text: "批注数据读取失败" });
-      content.createDiv({ cls: "side-comments-empty", text: EMPTY_STATES.readFailed });
+      header.createDiv({ cls: "side-comments-subtitle", text: this.plugin.t("empty.crossNote.readFailed") });
+      content.createDiv({ cls: "side-comments-empty", text: this.plugin.t("empty.readFailed") });
       return;
     }
 
     if (!document) {
-      header.createDiv({ cls: "side-comments-subtitle", text: "无当前文档" });
-      content.createDiv({ cls: "side-comments-empty", text: EMPTY_STATES.noMarkdownFile });
+      header.createDiv({ cls: "side-comments-subtitle", text: this.plugin.t("sidebar.noCurrentDocument") });
+      content.createDiv({ cls: "side-comments-empty", text: this.plugin.t("empty.noMarkdownFile") });
       return;
     }
 
     const filtered = this.getFilteredComments(document.comments);
+    const hiddenResolvedOnly = this.hasOnlyHiddenResolvedMatches(document.comments);
     header.createDiv({
       cls: "side-comments-subtitle",
       text: this.buildSubtitle(document.comments.length, filtered.length)
     });
 
     if (document.comments.length === 0) {
-      content.createDiv({ cls: "side-comments-empty", text: EMPTY_STATES.noComments });
+      content.createDiv({ cls: "side-comments-empty", text: this.plugin.t("empty.noComments") });
       return;
     }
 
     if (filtered.length === 0) {
-      content.createDiv({ cls: "side-comments-empty", text: EMPTY_STATES.noMatches });
+      const empty = content.createDiv({ cls: "side-comments-empty" });
+      empty.createDiv({ text: hiddenResolvedOnly ? this.plugin.t("empty.resolvedHidden") : this.plugin.t("empty.noMatches") });
+      if (hiddenResolvedOnly) {
+        createToolbarButton(empty, this.plugin.t("sidebar.showResolved"), this.plugin.t("sidebar.showResolved"), () => {
+          void this.setShowResolvedComments(true);
+        });
+      } else if (this.hasActiveFilters()) {
+        createToolbarButton(empty, this.plugin.t("filter.clear"), this.plugin.t("filter.clear"), () => {
+          this.clearFilters();
+        });
+      }
       return;
     }
 
     for (const comment of filtered) {
       const card = renderCommentCard(content, comment, {
-        expanded: !this.collapsedCommentIds.has(comment.id) || this.editingCommentId === comment.id,
+        t: this.plugin.t,
+        displayMode: this.plugin.settings.sidebarDisplayMode,
+        expanded: this.isCommentExpanded(comment),
         editing: this.editingCommentId === comment.id,
         flash: this.focusedCommentId === comment.id,
         draft: this.drafts.get(comment.id) ?? draftFromComment(comment),
         onToggleExpand: (commentId) => {
-          if (this.collapsedCommentIds.has(commentId)) {
+          const target = this.findComment(commentId);
+          if (target?.status === "resolved") {
+            if (this.expandedResolvedCommentIds.has(commentId)) {
+              this.expandedResolvedCommentIds.delete(commentId);
+            } else {
+              this.expandedResolvedCommentIds.add(commentId);
+            }
+          } else if (this.plugin.settings.sidebarDisplayMode === "compact") {
+            if (this.expandedCompactCommentIds.has(commentId)) {
+              this.expandedCompactCommentIds.delete(commentId);
+            } else {
+              this.expandedCompactCommentIds.add(commentId);
+            }
+          } else if (this.collapsedCommentIds.has(commentId)) {
             this.collapsedCommentIds.delete(commentId);
           } else {
             this.collapsedCommentIds.add(commentId);
@@ -315,7 +429,15 @@ export class SideCommentsSidebarView extends ItemView {
   private getFilteredComments(comments: SideComment[]): SideComment[] {
     const query = this.searchQuery.trim().toLowerCase();
     const matches = comments.filter((comment) => {
+      if (!this.plugin.settings.showResolvedComments && comment.status === "resolved") {
+        return false;
+      }
       if (this.markFilter !== "all" && comment.mark.type !== this.markFilter) {
+        if (!(this.markFilter === "comment" && isCommentLikeMark(comment))) {
+          return false;
+        }
+      }
+      if (this.colorFilter !== "all" && comment.mark.color !== this.colorFilter) {
         return false;
       }
       if (this.statusFilter !== "all" && comment.status !== this.statusFilter) {
@@ -333,12 +455,67 @@ export class SideCommentsSidebarView extends ItemView {
     return sortComments(matches);
   }
 
-  private buildSubtitle(total: number, visible: number): string {
-    const activeFilters = this.searchQuery.trim() || this.markFilter !== "all" || this.statusFilter !== "all";
-    if (activeFilters) {
-      return `当前文档 · 共 ${total} 条 · 当前显示 ${visible} 条`;
+  private hasOnlyHiddenResolvedMatches(comments: SideComment[]): boolean {
+    if (this.plugin.settings.showResolvedComments) {
+      return false;
     }
-    return `当前文档 · 共 ${total} 条批注`;
+
+    const matchesBeforeResolvedVisibility = comments.filter((comment) => {
+      if (this.markFilter !== "all" && comment.mark.type !== this.markFilter) {
+        if (!(this.markFilter === "comment" && isCommentLikeMark(comment))) {
+          return false;
+        }
+      }
+      if (this.colorFilter !== "all" && comment.mark.color !== this.colorFilter) {
+        return false;
+      }
+      if (this.statusFilter !== "all" && comment.status !== this.statusFilter) {
+        return false;
+      }
+
+      const query = this.searchQuery.trim().toLowerCase();
+      if (!query) {
+        return true;
+      }
+      return (
+        comment.anchor.selectedText.toLowerCase().includes(query) ||
+        comment.note.content.toLowerCase().includes(query)
+      );
+    });
+
+    return matchesBeforeResolvedVisibility.length > 0 && matchesBeforeResolvedVisibility.every((comment) => comment.status === "resolved");
+  }
+
+  private isCommentExpanded(comment: SideComment): boolean {
+    if (this.editingCommentId === comment.id) {
+      return true;
+    }
+    if (comment.status === "resolved") {
+      return this.expandedResolvedCommentIds.has(comment.id);
+    }
+    if (this.plugin.settings.sidebarDisplayMode === "compact") {
+      return this.expandedCompactCommentIds.has(comment.id);
+    }
+    return !this.collapsedCommentIds.has(comment.id);
+  }
+
+  private buildSubtitle(total: number, visible: number): string {
+    if (this.hasActiveFilters()) {
+      return this.plugin.t("sidebar.subtitle.filtered", { total, visible });
+    }
+    return this.plugin.t("sidebar.subtitle.total", { total });
+  }
+
+  private hasActiveFilters(): boolean {
+    return Boolean(this.searchQuery.trim()) || this.markFilter !== "all" || this.colorFilter !== "all" || this.statusFilter !== "all";
+  }
+
+  private clearFilters(): void {
+    this.searchQuery = "";
+    this.markFilter = "all";
+    this.colorFilter = "all";
+    this.statusFilter = "all";
+    void this.render();
   }
 
   private findComment(commentId: string): SideComment | null {
@@ -366,6 +543,34 @@ export class SideCommentsSidebarView extends ItemView {
       card?.scrollIntoView({ block: "center", behavior: "smooth" });
     });
   }
+}
+
+function createToolbarButton(
+  container: HTMLElement,
+  label: string,
+  tooltip: string,
+  onClick: () => void,
+  active = false
+): HTMLButtonElement {
+  const button = container.createEl("button", {
+    cls: ["side-comments-toolbar-button", active ? "is-active" : ""].filter(Boolean).join(" "),
+    attr: {
+      type: "button",
+      title: tooltip,
+      "aria-label": tooltip
+    }
+  });
+  button.createSpan({ cls: "side-comments-toolbar-button-label", text: label });
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onClick();
+  });
+  return button;
+}
+
+function isCommentLikeMark(comment: SideComment): boolean {
+  return comment.mark.type === "highlight" && comment.mark.color === "purple";
 }
 
 function draftFromComment(comment: SideComment): CommentDraft {
