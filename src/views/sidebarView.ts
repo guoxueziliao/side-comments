@@ -239,6 +239,14 @@ export class SideCommentsSidebarView extends ItemView {
       }
     );
 
+    const exportRow = header.createDiv({ cls: "side-comments-toolbar-row side-comments-toolbar-row--export" });
+    createToolbarButton(exportRow, this.plugin.t("export.format.json"), this.plugin.t("export.currentNote"), () => {
+      void this.plugin.exportCurrentNoteAnnotations("json");
+    });
+    createToolbarButton(exportRow, this.plugin.t("export.format.markdown"), this.plugin.t("export.currentNote"), () => {
+      void this.plugin.exportCurrentNoteAnnotations("markdown");
+    });
+
     const searchRow = header.createDiv({ cls: "side-comments-toolbar-row" });
     const searchInput = searchRow.createEl("input", {
       attr: {

@@ -71,6 +71,33 @@
   flex: 1 1 180px;
 }
 
+.side-comments-toolbar-row--export {
+  justify-content: flex-start;
+}
+
+.side-comments-selected-notes-export-list {
+  display: flex;
+  max-height: 320px;
+  flex-direction: column;
+  gap: 4px;
+  overflow: auto;
+  padding: 4px 0;
+}
+
+.side-comments-selected-notes-export-item {
+  display: flex;
+  min-width: 0;
+  gap: 8px;
+  align-items: flex-start;
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+  line-height: 1.4;
+}
+
+.side-comments-selected-notes-export-item span {
+  overflow-wrap: anywhere;
+}
+
 .side-comments-empty {
   display: flex;
   flex-direction: column;

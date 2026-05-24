@@ -18,10 +18,20 @@ import { DEFAULT_SETTINGS, loadSideCommentsSettings, saveSideCommentsSettings } 
 import { SideCommentsSettingTab } from "./src/settings/settingsTab";
 import { SidecarStore } from "./src/storage/sidecarStore";
 import { normalizeVaultRelativePath } from "./src/storage/pathHash";
+import { createExportPackage, exportPackageToMarkdown, serializeExportPackage } from "./src/storage/export";
 import { SideCommentsSidebarView, SIDE_COMMENTS_VIEW_TYPE } from "./src/views/sidebarView";
 import { SideCommentsCrossNoteView, SIDE_COMMENTS_CROSS_NOTE_VIEW_TYPE } from "./src/views/crossNoteView";
 import { createTranslator, type Translator } from "./src/i18n";
-import type { AnchorSourceMode, CommentUpdateInput, PluginSettings, SideComment, SideCommentDocument } from "./src/types";
+import type {
+  AnchorSourceMode,
+  CommentUpdateInput,
+  MaintenanceExportFormat,
+  MaintenanceExportScope,
+  PluginSettings,
+  SideComment,
+  SideCommentDocument,
+  SideCommentExportDocumentEntry
+} from "./src/types";
 
 type CurrentDocumentLoadState = "none" | "ready" | "failed";
 
@@ -581,6 +591,48 @@ export default class SideCommentsPlugin extends Plugin {
     await this.jumpToCommentInEditor(commentId);
   }
 
+  async exportCurrentNoteAnnotations(format: MaintenanceExportFormat): Promise<void> {
+    const file = this.getActiveMarkdownFile();
+    if (!file) {
+      new Notice(this.t("notice.openMarkdownFirst"));
+      return;
+    }
+
+    try {
+      const entry = await this.store.loadExportEntryForFile(file.path);
+      await this.writeMaintenanceExport("current-note", format, entry ? [entry] : []);
+    } catch (error) {
+      console.error("Side Comments failed to export current note", error);
+      new Notice(this.t("export.failed"));
+    }
+  }
+
+  async exportSelectedNoteAnnotations(files: TFile[], format: MaintenanceExportFormat): Promise<void> {
+    const markdownFiles = files.filter((file) => file.extension === "md");
+    if (markdownFiles.length === 0) {
+      new Notice(this.t("notice.openMarkdownFirst"));
+      return;
+    }
+
+    try {
+      const entries = await this.store.listSelectedExportEntries(markdownFiles.map((file) => file.path));
+      await this.writeMaintenanceExport("selected-notes", format, entries);
+    } catch (error) {
+      console.error("Side Comments failed to export selected notes", error);
+      new Notice(this.t("export.failed"));
+    }
+  }
+
+  async exportAllSidecarMetadata(format: MaintenanceExportFormat): Promise<void> {
+    try {
+      const entries = await this.store.loadAllExportEntries();
+      await this.writeMaintenanceExport("all-sidecars", format, entries);
+    } catch (error) {
+      console.error("Side Comments failed to export all sidecars", error);
+      new Notice(this.t("export.failed"));
+    }
+  }
+
   async jumpToCommentInEditor(commentId: string): Promise<void> {
     const document = this.requireCurrentDocument();
     const comment = document.comments.find((item) => item.id === commentId);
@@ -617,6 +669,41 @@ export default class SideCommentsPlugin extends Plugin {
   async refreshSidebar(): Promise<void> {
     for (const view of this.getSidebarViews()) {
       await view.render();
+    }
+  }
+
+  private async writeMaintenanceExport(
+    scope: MaintenanceExportScope,
+    format: MaintenanceExportFormat,
+    documents: SideCommentExportDocumentEntry[]
+  ): Promise<void> {
+    const exportPackage = createExportPackage({
+      pluginVersion: this.manifest.version,
+      scope,
+      vaultName: this.app.vault.getName(),
+      documents
+    });
+    const content = format === "json"
+      ? serializeExportPackage(exportPackage)
+      : exportPackageToMarkdown(exportPackage);
+    const extension = format === "json" ? "json" : "md";
+    const path = normalizeVaultRelativePath(
+      `${this.settings.dataDir}/exports/${scope}-${formatTimestamp(new Date())}.${extension}`
+    );
+    await this.ensureAdapterFolder(path.slice(0, path.lastIndexOf("/")));
+    await this.app.vault.adapter.write(path, content);
+    new Notice(this.t("export.success"));
+  }
+
+  private async ensureAdapterFolder(folderPath: string): Promise<void> {
+    const parts = folderPath.split("/");
+    let current = "";
+
+    for (const part of parts) {
+      current = current ? `${current}/${part}` : part;
+      if (!(await this.app.vault.adapter.exists(current))) {
+        await this.app.vault.adapter.mkdir(current);
+      }
     }
   }
 
@@ -737,6 +824,10 @@ export default class SideCommentsPlugin extends Plugin {
       console.error("Side Comments failed to render reading view marks", error);
     }
   }
+}
+
+function formatTimestamp(date: Date): string {
+  return date.toISOString().replace(/[:.]/g, "-");
 }
 
 interface SourceMatchOptions {

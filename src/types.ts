@@ -121,3 +121,33 @@ export interface RecentPreviewItem {
     status: SideCommentStatus;
   }[];
 }
+
+export type MaintenanceExportScope = "current-note" | "selected-notes" | "all-sidecars";
+export type MaintenanceExportFormat = "json" | "markdown";
+
+export interface SideCommentExportStats {
+  total: number;
+  active: number;
+  resolved: number;
+  orphaned: number;
+}
+
+export interface SideCommentExportDocumentEntry {
+  filePath: string;
+  sidecarPath: string;
+  schemaVersion: number;
+  comments: SideComment[];
+  stats: SideCommentExportStats;
+}
+
+export interface SideCommentsExportPackage {
+  format: "side-comments-export";
+  formatVersion: 1;
+  pluginVersion: string;
+  exportedAt: string;
+  scope: MaintenanceExportScope;
+  vault?: {
+    name?: string;
+  };
+  documents: SideCommentExportDocumentEntry[];
+}

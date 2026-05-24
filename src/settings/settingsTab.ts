@@ -1,6 +1,6 @@
-import { App, PluginSettingTab, Setting } from "obsidian";
+import { App, Modal, PluginSettingTab, Setting, TFile } from "obsidian";
 import type SideCommentsPlugin from "../../main";
-import type { SidebarDisplayMode } from "../types";
+import type { MaintenanceExportFormat, SidebarDisplayMode } from "../types";
 
 export class SideCommentsSettingTab extends PluginSettingTab {
   constructor(app: App, private readonly plugin: SideCommentsPlugin) {
@@ -102,5 +102,107 @@ export class SideCommentsSettingTab extends PluginSettingTab {
         text.setValue(this.plugin.settings.dataDir);
         text.inputEl.disabled = true;
       });
+
+    this.renderMaintenanceSection(containerEl);
+  }
+
+  private renderMaintenanceSection(containerEl: HTMLElement): void {
+    containerEl.createEl("h3", { text: this.plugin.t("maintenance.title") });
+
+    containerEl.createEl("h4", { text: this.plugin.t("maintenance.export.title") });
+    this.renderExportSetting(containerEl, this.plugin.t("export.currentNote"), (format) => {
+      void this.plugin.exportCurrentNoteAnnotations(format);
+    });
+    this.renderExportSetting(containerEl, this.plugin.t("export.selectedNotes"), (format) => {
+      new SelectedNotesExportModal(this.app, this.plugin, format).open();
+    });
+    this.renderExportSetting(containerEl, this.plugin.t("export.allSidecars"), (format) => {
+      void this.plugin.exportAllSidecarMetadata(format);
+    });
+
+    containerEl.createEl("h4", { text: this.plugin.t("maintenance.import.title") });
+    containerEl.createEl("h4", { text: this.plugin.t("maintenance.health.title") });
+    containerEl.createEl("h4", { text: this.plugin.t("maintenance.repair.title") });
+  }
+
+  private renderExportSetting(
+    containerEl: HTMLElement,
+    name: string,
+    onExport: (format: MaintenanceExportFormat) => void
+  ): void {
+    new Setting(containerEl)
+      .setName(name)
+      .addButton((button) => {
+        button
+          .setButtonText(this.plugin.t("export.format.json"))
+          .onClick(() => onExport("json"));
+      })
+      .addButton((button) => {
+        button
+          .setButtonText(this.plugin.t("export.format.markdown"))
+          .onClick(() => onExport("markdown"));
+      });
+  }
+}
+
+class SelectedNotesExportModal extends Modal {
+  private selectedPaths = new Set<string>();
+
+  constructor(
+    app: App,
+    private readonly plugin: SideCommentsPlugin,
+    private readonly format: MaintenanceExportFormat
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h2", { text: this.plugin.t("export.selectedNotes") });
+
+    const files = this.app.vault
+      .getMarkdownFiles()
+      .sort((left, right) => left.path.localeCompare(right.path));
+
+    const list = contentEl.createDiv({ cls: "side-comments-selected-notes-export-list" });
+    for (const file of files) {
+      const label = list.createEl("label", { cls: "side-comments-selected-notes-export-item" });
+      const checkbox = label.createEl("input", {
+        attr: {
+          type: "checkbox"
+        }
+      });
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) {
+          this.selectedPaths.add(file.path);
+        } else {
+          this.selectedPaths.delete(file.path);
+        }
+      });
+      label.createSpan({ text: file.path });
+    }
+
+    new Setting(contentEl)
+      .addButton((button) => {
+        button
+          .setButtonText(this.plugin.t("action.cancel"))
+          .onClick(() => this.close());
+      })
+      .addButton((button) => {
+        button
+          .setCta()
+          .setButtonText(this.plugin.t("maintenance.export.title"))
+          .onClick(() => {
+            const selectedFiles = files.filter((file) => this.selectedPaths.has(file.path));
+            void this.plugin.exportSelectedNoteAnnotations(selectedFiles as TFile[], this.format);
+            this.close();
+          });
+      });
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+    this.selectedPaths.clear();
   }
 }

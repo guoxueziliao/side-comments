@@ -4,6 +4,7 @@ import { relocateComment } from "../anchor/relocate";
 import {
   type AnchorSourceMode,
   CURRENT_SCHEMA_VERSION,
+  type SideCommentExportDocumentEntry,
   type RecentPreviewItem,
   type CommentCreateInput,
   type CommentUpdateInput,
@@ -15,6 +16,7 @@ import {
 import { createRecentPreview } from "./recentPreview";
 import { LruCache } from "./lruCache";
 import { migrateDocument, sortComments } from "./migration";
+import { buildExportDocumentEntry } from "./export";
 import {
   getBucketDir,
   getManifestPath,
@@ -333,6 +335,63 @@ export class SidecarStore {
     }
   }
 
+  async loadExportEntryForFile(filePath: string): Promise<SideCommentExportDocumentEntry | null> {
+    const normalizedPath = normalizeVaultRelativePath(filePath);
+    const sidecarPath = await getSidecarPath(normalizedPath, this.settings.dataDir);
+    if (!(await this.app.vault.adapter.exists(sidecarPath))) {
+      return null;
+    }
+
+    const document = await this.loadDocument(normalizedPath);
+    return buildExportDocumentEntry({
+      filePath: document.filePath,
+      sidecarPath,
+      schemaVersion: document.schemaVersion,
+      comments: document.comments
+    });
+  }
+
+  async loadAllExportEntries(): Promise<SideCommentExportDocumentEntry[]> {
+    const paths = await this.listSidecarPaths(normalizePath(`${this.settings.dataDir}/files`));
+    const entries: SideCommentExportDocumentEntry[] = [];
+
+    for (const sidecarPath of paths) {
+      try {
+        const raw = await this.app.vault.adapter.read(sidecarPath);
+        const parsed = JSON.parse(raw) as unknown;
+        const document = await migrateDocument(parsed, {
+          adapter: this.app.vault.adapter,
+          filePath: this.extractFilePath(parsed, sidecarPath),
+          dataDir: this.settings.dataDir
+        });
+
+        entries.push(
+          buildExportDocumentEntry({
+            filePath: document.filePath,
+            sidecarPath,
+            schemaVersion: document.schemaVersion,
+            comments: document.comments
+          })
+        );
+      } catch (error) {
+        console.error("Side Comments failed to read sidecar for export", error);
+      }
+    }
+
+    return entries;
+  }
+
+  async listSelectedExportEntries(filePaths: string[]): Promise<SideCommentExportDocumentEntry[]> {
+    const entries: SideCommentExportDocumentEntry[] = [];
+    for (const filePath of filePaths) {
+      const entry = await this.loadExportEntryForFile(filePath);
+      if (entry) {
+        entries.push(entry);
+      }
+    }
+    return entries;
+  }
+
   private async createEmptyDocument(filePath: string): Promise<SideCommentDocument> {
     return {
       schemaVersion: CURRENT_SCHEMA_VERSION,
@@ -389,6 +448,28 @@ export class SidecarStore {
         await this.app.vault.adapter.mkdir(current);
       }
     }
+  }
+
+  private async listSidecarPaths(folderPath: string): Promise<string[]> {
+    if (!(await this.app.vault.adapter.exists(folderPath))) {
+      return [];
+    }
+
+    const listed = await this.app.vault.adapter.list(folderPath);
+    const nested = await Promise.all(listed.folders.map((folder) => this.listSidecarPaths(folder)));
+    return [...listed.files, ...nested.flat()].filter((filePath) => filePath.endsWith(".json"));
+  }
+
+  private extractFilePath(parsed: unknown, sidecarPath: string): string {
+    if (typeof parsed === "object" && parsed !== null) {
+      const raw = parsed as Record<string, unknown>;
+      if (typeof raw.filePath === "string" && raw.filePath.trim()) {
+        return raw.filePath;
+      }
+    }
+
+    const fallback = sidecarPath.split("/files/").pop()?.replace(/^[^/]+\//, "") ?? sidecarPath;
+    return fallback.replace(/\.json$/, "");
   }
 }
 
