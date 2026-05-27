@@ -208,7 +208,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isMarkType(value: unknown): value is MarkType {
-  return value === "highlight" || value === "underline" || value === "strikethrough";
+  return value === "highlight" || value === "underline" || value === "strikethrough" || value === "note";
 }
 
 function isMarkColor(value: unknown): value is MarkColor {

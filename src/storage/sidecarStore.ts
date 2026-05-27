@@ -153,7 +153,7 @@ export class SidecarStore {
       annotationType: input.annotationType ?? "excerpt",
       tags: [],
       note: {
-        content: "",
+        content: input.noteContent ?? "",
         createdAt: now,
         updatedAt: now
       },
@@ -219,6 +219,45 @@ export class SidecarStore {
 
   async setCommentStatus(filePath: string, commentId: string, status: SideComment["status"]): Promise<SideCommentDocument> {
     return this.updateComment(filePath, commentId, { status });
+  }
+
+  async mergeComments(filePath: string, primaryCommentId: string, commentIdsToRemove: string[], mergedNoteContent: string): Promise<SideCommentDocument> {
+    const document = await this.loadDocument(filePath);
+    const removeSet = new Set(commentIdsToRemove);
+    let foundPrimary = false;
+    const now = new Date().toISOString();
+    const comments = document.comments.flatMap((comment) => {
+      if (removeSet.has(comment.id)) {
+        return [];
+      }
+      if (comment.id !== primaryCommentId) {
+        return [comment];
+      }
+      foundPrimary = true;
+      return [{
+        ...comment,
+        note: {
+          ...comment.note,
+          content: mergedNoteContent,
+          updatedAt: now
+        }
+      }];
+    });
+
+    if (!foundPrimary) {
+      throw new Error(`Side comment not found: ${primaryCommentId}`);
+    }
+
+    return this.saveDocument({ ...document, comments });
+  }
+
+  async deleteComments(filePath: string, commentIds: string[]): Promise<SideCommentDocument> {
+    const removeSet = new Set(commentIds);
+    const document = await this.loadDocument(filePath);
+    return this.saveDocument({
+      ...document,
+      comments: document.comments.filter((comment) => !removeSet.has(comment.id))
+    });
   }
 
   async updateCommentAnchor(
@@ -397,6 +436,25 @@ export class SidecarStore {
     return entries;
   }
 
+  async getSidecarPathForFile(filePath: string): Promise<string> {
+    return getSidecarPath(normalizeVaultRelativePath(filePath), this.settings.dataDir);
+  }
+
+  async deleteDocumentSidecar(filePath: string): Promise<void> {
+    const normalizedPath = normalizeVaultRelativePath(filePath);
+    const sidecarPath = await getSidecarPath(normalizedPath, this.settings.dataDir);
+    if (await this.app.vault.adapter.exists(sidecarPath)) {
+      await this.app.vault.adapter.remove(sidecarPath);
+    }
+    this.cache.delete(normalizedPath);
+    await this.removeRecentPreview(normalizedPath);
+    await this.writeManifest();
+  }
+
+  getDataDir(): string {
+    return this.settings.dataDir;
+  }
+
   private async createEmptyDocument(filePath: string): Promise<SideCommentDocument> {
     return {
       schemaVersion: CURRENT_SCHEMA_VERSION,
@@ -423,16 +481,7 @@ export class SidecarStore {
     const recentDir = recentPath.slice(0, recentPath.lastIndexOf("/"));
     await this.ensureFolder(recentDir);
 
-    let items: unknown[] = [];
-    if (await this.app.vault.adapter.exists(recentPath)) {
-      try {
-        const raw = await this.app.vault.adapter.read(recentPath);
-        const parsed = JSON.parse(raw);
-        items = Array.isArray(parsed) ? parsed : [];
-      } catch {
-        items = [];
-      }
-    }
+    const items = await this.readRecentPreviewItems();
 
     const preview = createRecentPreview(document);
     const next = [
@@ -441,6 +490,34 @@ export class SidecarStore {
     ].slice(0, this.settings.maxCachedDocuments);
 
     await this.app.vault.adapter.write(recentPath, JSON.stringify(next, null, 2));
+  }
+
+  private async removeRecentPreview(filePath: string): Promise<void> {
+    const recentPath = getRecentPreviewPath(this.settings.dataDir);
+    if (!(await this.app.vault.adapter.exists(recentPath))) {
+      return;
+    }
+
+    const items = await this.readRecentPreviewItems();
+    const next = items.filter((item) =>
+      !(typeof item === "object" && item !== null && (item as { filePath?: string }).filePath === filePath)
+    );
+    await this.app.vault.adapter.write(recentPath, JSON.stringify(next, null, 2));
+  }
+
+  private async readRecentPreviewItems(): Promise<unknown[]> {
+    const recentPath = getRecentPreviewPath(this.settings.dataDir);
+    if (!(await this.app.vault.adapter.exists(recentPath))) {
+      return [];
+    }
+
+    try {
+      const raw = await this.app.vault.adapter.read(recentPath);
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
   }
 
   private async ensureFolder(folderPath: string): Promise<void> {
@@ -519,7 +596,7 @@ function normalizeRecentPreviewComment(value: unknown): RecentPreviewItem["previ
   }
 
   const status = raw.status === "resolved" || raw.status === "orphaned" ? raw.status : "active";
-  if (raw.markType !== "highlight" && raw.markType !== "underline" && raw.markType !== "strikethrough") {
+  if (raw.markType !== "highlight" && raw.markType !== "underline" && raw.markType !== "strikethrough" && raw.markType !== "note") {
     return [];
   }
   if (
@@ -543,7 +620,8 @@ function normalizeRecentPreviewComment(value: unknown): RecentPreviewItem["previ
       annotationType: raw.annotationType === "question" || raw.annotationType === "thought" || raw.annotationType === "task" || raw.annotationType === "excerpt"
         ? raw.annotationType
         : undefined,
-      tags: Array.isArray(raw.tags) ? normalizeTags(raw.tags.filter((tag): tag is string => typeof tag === "string")) : undefined
+      tags: Array.isArray(raw.tags) ? normalizeTags(raw.tags.filter((tag): tag is string => typeof tag === "string")) : undefined,
+      updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : ""
     }
   ];
 }

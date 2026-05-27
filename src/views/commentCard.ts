@@ -1,4 +1,5 @@
-import type { AnnotationType, CommentDraft, MarkColor, SidebarDisplayMode, SideComment, SideCommentStatus } from "../types";
+import { Menu, setIcon } from "obsidian";
+import type { AnnotationType, CommentDraft, MarkColor, MarkType, SideComment, SideCommentStatus } from "../types";
 import type { Translator } from "../i18n";
 import {
   ANNOTATION_TYPES,
@@ -8,26 +9,34 @@ import {
   normalizeTags
 } from "../organization/annotationMetadata";
 
+const MARK_ICONS: Record<MarkType, string> = {
+  highlight: "highlighter",
+  underline: "underline",
+  strikethrough: "strikethrough",
+  note: "sticky-note"
+};
+
+const VISIBLE_TAG_LIMIT = 2;
+
 export interface CommentCardContext {
   t: Translator;
-  displayMode: SidebarDisplayMode;
   expanded: boolean;
   editing: boolean;
   flash: boolean;
   draft: CommentDraft;
-  onToggleExpand: (commentId: string) => void;
-  onBeginEdit: (commentId: string) => void;
-  onCancelEdit: (commentId: string) => void;
-  onSave: (commentId: string, draft: CommentDraft) => void;
-  onDelete: (commentId: string) => void;
-  onToggleStatus: (commentId: string, status: SideCommentStatus) => void;
-  onJump: (commentId: string) => void;
-  onRebind: (commentId: string) => void;
-  onAdjustRange: (commentId: string) => void;
-  onDraftChange: (commentId: string, draft: CommentDraft) => void;
-  onSetAnnotationType: (commentId: string, annotationType: AnnotationType) => void;
-  onSetTags: (commentId: string, tags: string[]) => void;
   tagSuggestions: string[];
+  filenamePrefix?: { name: string; fullPath: string };
+  extraMenuItems?: (menu: Menu, comment: SideComment) => void;
+  onJump: (commentId: string) => void;
+  onToggleExpand: (commentId: string) => void;
+  onBeginEdit?: (commentId: string) => void;
+  onCancelEdit?: (commentId: string) => void;
+  onSave?: (commentId: string, draft: CommentDraft) => void;
+  onDelete?: (commentId: string) => void;
+  onToggleStatus?: (commentId: string, status: SideCommentStatus) => void;
+  onRebind?: (commentId: string) => void;
+  onAdjustRange?: (commentId: string) => void;
+  onDraftChange?: (commentId: string, draft: CommentDraft) => void;
 }
 
 export function renderCommentCard(
@@ -39,295 +48,312 @@ export function renderCommentCard(
     cls: [
       "side-comments-card",
       `side-comments-card--${comment.status}`,
-      context.expanded ? "is-expanded" : "",
+      context.expanded ? "is-expanded" : "is-collapsed",
+      context.editing ? "is-editing" : "",
       context.flash ? "side-comments-card--flash" : ""
     ].filter(Boolean)
   });
   card.dataset.commentId = comment.id;
 
-  const header = card.createDiv({ cls: "side-comments-card-header" });
-  const meta = header.createDiv({ cls: "side-comments-card-meta" });
-  meta.createSpan({ cls: `side-comments-color-dot side-comments-color-dot--${comment.mark.color}` });
-  meta.createSpan({ text: `${annotationTypeLabel(getAnnotationType(comment), context.t)} · ${markLabel(comment, context.t)} · ${colorLabel(comment.mark.color, context.t)}` });
-  meta.createSpan({ text: ` · ${statusLabel(comment.status, context.t)}` });
-  meta.createSpan({ text: ` · ${formatTime(comment.note.updatedAt)}` });
+  renderColorBar(card, comment, context);
+  const content = card.createDiv({ cls: "side-comments-card-content" });
+  renderHeader(content, comment, context);
 
-  const headerActions = header.createDiv({ cls: "side-comments-card-header-actions" });
-  createActionButton(headerActions, context.expanded ? context.t("action.collapse.short") : context.t("action.expand.short"), context.expanded ? context.t("action.collapse") : context.t("action.expand"), () => {
-    context.onToggleExpand(comment.id);
-  });
-  createActionButton(headerActions, context.t("action.jump.short"), context.t("action.jumpToText"), () => {
-    context.onJump(comment.id);
-  });
-  if (comment.status === "orphaned") {
-    createActionButton(headerActions, context.t("action.rebind.short"), context.t("action.rebind.tooltip"), () => {
-      context.onRebind(comment.id);
-    });
-  } else {
-    createActionButton(headerActions, context.t("action.adjust.short"), context.t("action.adjust.tooltip"), () => {
-      context.onAdjustRange(comment.id);
-    });
-  }
-  createActionButton(headerActions, context.editing ? context.t("action.save.short") : context.t("action.edit.short"), context.editing ? context.t("action.save") : context.t("action.edit"), () => {
-    if (context.editing) {
-      context.onSave(comment.id, context.draft);
-    } else {
-      context.onBeginEdit(comment.id);
-    }
-  });
-  createActionButton(headerActions, comment.status === "active" ? context.t("action.resolve.short") : context.t("action.restore.short"), comment.status === "active" ? context.t("action.resolve") : context.t("action.restore"), () => {
-    if (comment.status === "orphaned") {
-      return;
-    }
-    context.onToggleStatus(comment.id, comment.status === "active" ? "resolved" : "active");
-  }, comment.status === "orphaned");
-  createActionButton(headerActions, context.t("action.delete.short"), context.t("action.delete"), () => {
-    context.onDelete(comment.id);
-  });
-
-  if (!context.expanded && comment.status === "resolved" && !context.editing) {
-    card.createDiv({
-      cls: "side-comments-card-resolved-summary",
-      text: comment.anchor.selectedText || context.t("card.emptySelection")
-    });
-    card.addClass("is-resolved");
-    return card;
-  }
-
-  if (context.displayMode === "compact" && !context.expanded && !context.editing) {
-    card.addClass("side-comments-card--compact");
-    const compactBody = card.createDiv({ cls: "side-comments-card-compact-body" });
-    compactBody.addEventListener("click", () => {
-      context.onToggleExpand(comment.id);
-    });
-
-    compactBody.createDiv({
-      cls: "side-comments-card-compact-text",
-      text: comment.anchor.selectedText || context.t("card.emptySelection")
-    });
-
-    const note = comment.note.content.trim();
-    if (note) {
-      compactBody.createDiv({
-        cls: "side-comments-card-compact-note",
-        text: note
-      });
-    }
-
-    if (comment.status === "orphaned") {
-      card.addClass("is-orphaned");
-    }
-    if (comment.status === "resolved") {
-      card.addClass("is-resolved");
-    }
-    return card;
-  }
-
-  const body = card.createDiv({ cls: "side-comments-card-body" });
-  if (!context.expanded) {
-    body.addClass("is-collapsed");
-  }
-
-  renderOrganizationFields(body, comment, context);
-
-  body.createDiv({ cls: "side-comments-card-section-title", text: context.t("card.source") });
-  body.createDiv({
-    cls: "side-comments-card-excerpt",
-    text: comment.anchor.selectedText || context.t("card.emptySelection")
-  });
-
-  if (comment.status === "orphaned") {
-    body.createDiv({ cls: "side-comments-card-section-title", text: context.t("card.context") });
-    body.createDiv({
-      cls: "side-comments-card-context",
-      text: buildAnchorContextPreview(comment)
-    });
-  }
-
-  body.createDiv({ cls: "side-comments-card-section-title", text: context.t("card.comment") });
   if (context.editing) {
-    renderEditFields(body, comment, context);
+    renderEditPanel(content, comment, context);
   } else {
-    body.createDiv({
-      cls: "side-comments-card-note",
-      text: comment.note.content || context.t("card.emptyNote")
-    });
-  }
-
-  if (comment.status === "orphaned") {
-    card.addClass("is-orphaned");
-  }
-  if (comment.status === "resolved") {
-    card.addClass("is-resolved");
+    renderBody(content, comment, context);
   }
 
   return card;
 }
 
-function buildAnchorContextPreview(comment: SideComment): string {
-  const before = comment.anchor.context?.before ?? comment.anchor.prefix;
-  const after = comment.anchor.context?.after ?? comment.anchor.suffix;
-  return `${before}[${comment.anchor.selectedText}]${after}`.trim() || comment.anchor.selectedText;
-}
-
-function renderEditFields(container: HTMLElement, comment: SideComment, context: CommentCardContext): void {
-  let draft = { ...context.draft };
-
-  const typeRow = container.createDiv({ cls: "side-comments-card-edit-row" });
-  const typeSelect = typeRow.createEl("select");
-  for (const value of ["highlight", "underline", "strikethrough"] as const) {
-    const option = typeSelect.createEl("option", { text: markLabel(value, context.t) });
-    option.value = value;
-  }
-  typeSelect.value = draft.markType;
-  typeSelect.addEventListener("change", () => {
-    draft = {
-      ...draft,
-      markType: typeSelect.value as CommentDraft["markType"]
-    };
-    context.onDraftChange(comment.id, draft);
+function renderColorBar(card: HTMLElement, comment: SideComment, context: CommentCardContext): void {
+  const bar = card.createDiv({
+    cls: `side-comments-card-color-bar side-comments-card-color-bar--${comment.mark.color}`
   });
 
-  const colorSelect = typeRow.createEl("select");
-  for (const value of ["yellow", "blue", "red", "green", "purple"] as const) {
+  const indicator = bar.createEl("button", {
+    cls: [
+      "side-comments-card-status-indicator",
+      `side-comments-card-status-indicator--${comment.status}`
+    ].join(" "),
+    attr: {
+      type: "button",
+      title: statusLabel(comment.status, context.t),
+      "aria-label": statusLabel(comment.status, context.t)
+    }
+  });
+  if (comment.status === "orphaned") {
+    setIcon(indicator, "unlink-2");
+    indicator.disabled = true;
+  } else if (comment.status === "resolved") {
+    setIcon(indicator, "check");
+  }
+  if (comment.status !== "orphaned" && context.onToggleStatus) {
+    const toggle = context.onToggleStatus;
+    const next = comment.status === "active" ? "resolved" : "active";
+    indicator.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      toggle(comment.id, next);
+    });
+  } else if (comment.status !== "orphaned") {
+    indicator.disabled = true;
+  }
+}
+
+function renderHeader(content: HTMLElement, comment: SideComment, context: CommentCardContext): void {
+  const header = content.createDiv({ cls: "side-comments-card-header" });
+  const meta = header.createDiv({ cls: "side-comments-card-meta" });
+
+  if (context.filenamePrefix) {
+    meta.createSpan({
+      cls: "side-comments-card-meta-filename",
+      text: context.filenamePrefix.name,
+      attr: { title: context.filenamePrefix.fullPath }
+    });
+  }
+
+  const markIcon = meta.createSpan({
+    cls: "side-comments-card-meta-icon",
+    attr: { title: markLabel(comment, context.t), "aria-label": markLabel(comment, context.t) }
+  });
+  setIcon(markIcon, MARK_ICONS[comment.mark.type] ?? "highlighter");
+
+  meta.createSpan({
+    cls: "side-comments-card-meta-type",
+    text: annotationTypeLabel(getAnnotationType(comment), context.t)
+  });
+
+  const tags = normalizeTags(comment.tags);
+  for (const tag of tags.slice(0, VISIBLE_TAG_LIMIT)) {
+    meta.createSpan({ cls: "side-comments-card-meta-tag", text: tag });
+  }
+  if (tags.length > VISIBLE_TAG_LIMIT) {
+    meta.createSpan({
+      cls: "side-comments-card-meta-tag side-comments-card-meta-tag--overflow",
+      text: `+${tags.length - VISIBLE_TAG_LIMIT}`
+    });
+  }
+
+  meta.createSpan({
+    cls: "side-comments-card-meta-time",
+    text: formatTime(comment.note.updatedAt)
+  });
+
+  const overflowBtn = header.createEl("button", {
+    cls: "side-comments-card-overflow-btn",
+    attr: {
+      type: "button",
+      title: context.t("toolbar.more"),
+      "aria-label": context.t("toolbar.more")
+    }
+  });
+  setIcon(overflowBtn, "more-horizontal");
+  overflowBtn.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    openOverflowMenu(event, comment, context);
+  });
+}
+
+function openOverflowMenu(event: MouseEvent, comment: SideComment, context: CommentCardContext): void {
+  const menu = new Menu();
+  let hasStandardItems = false;
+
+  if (context.onBeginEdit) {
+    const onBeginEdit = context.onBeginEdit;
+    hasStandardItems = true;
+    menu.addItem((item) => {
+      item.setTitle(context.t("action.edit"))
+        .setIcon("pencil")
+        .onClick(() => onBeginEdit(comment.id));
+    });
+  }
+
+  hasStandardItems = true;
+  menu.addItem((item) => {
+    item.setTitle(context.expanded ? context.t("action.collapse") : context.t("action.expand"))
+      .setIcon(context.expanded ? "chevron-up" : "chevron-down")
+      .onClick(() => context.onToggleExpand(comment.id));
+  });
+
+  if (comment.status === "orphaned" && context.onRebind) {
+    const onRebind = context.onRebind;
+    menu.addItem((item) => {
+      item.setTitle(context.t("action.rebind.tooltip"))
+        .setIcon("link-2")
+        .onClick(() => onRebind(comment.id));
+    });
+  } else if (comment.status !== "orphaned" && context.onAdjustRange) {
+    const onAdjustRange = context.onAdjustRange;
+    menu.addItem((item) => {
+      item.setTitle(context.t("action.adjust.tooltip"))
+        .setIcon("move")
+        .onClick(() => onAdjustRange(comment.id));
+    });
+  }
+
+  if (context.onDelete) {
+    const onDelete = context.onDelete;
+    menu.addSeparator();
+    menu.addItem((item) => {
+      item.setTitle(context.t("action.delete"))
+        .setIcon("trash-2")
+        .onClick(() => onDelete(comment.id));
+    });
+  }
+
+  if (context.extraMenuItems) {
+    if (hasStandardItems) {
+      menu.addSeparator();
+    }
+    context.extraMenuItems(menu, comment);
+  }
+
+  menu.showAtMouseEvent(event);
+}
+
+function renderBody(content: HTMLElement, comment: SideComment, context: CommentCardContext): void {
+  const collapsedResolved = comment.status === "resolved" && !context.expanded;
+  const body = content.createDiv({
+    cls: [
+      "side-comments-card-body",
+      collapsedResolved ? "side-comments-card-body--resolved-collapsed" : ""
+    ].filter(Boolean).join(" ")
+  });
+  body.addEventListener("click", (event) => {
+    if (isInteractiveTarget(event.target)) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    context.onJump(comment.id);
+  });
+
+  const excerptText = comment.anchor.selectedText || context.t("card.emptySelection");
+
+  if (collapsedResolved) {
+    body.createDiv({ cls: "side-comments-card-excerpt-summary", text: excerptText });
+    return;
+  }
+
+  if (context.expanded) {
+    body.createDiv({ cls: "side-comments-card-section-title", text: context.t("card.source") });
+  }
+  body.createDiv({ cls: "side-comments-card-excerpt", text: excerptText });
+
+  if (comment.status === "orphaned" && context.expanded) {
+    body.createDiv({ cls: "side-comments-card-section-title", text: context.t("card.context") });
+    body.createDiv({ cls: "side-comments-card-context", text: buildAnchorContextPreview(comment) });
+  }
+
+  const noteText = comment.note.content.trim();
+  if (noteText || context.expanded) {
+    if (context.expanded) {
+      body.createDiv({ cls: "side-comments-card-section-title", text: context.t("card.comment") });
+    }
+    body.createDiv({
+      cls: "side-comments-card-note",
+      text: noteText || context.t("card.emptyNote")
+    });
+  }
+}
+
+function renderEditPanel(content: HTMLElement, comment: SideComment, context: CommentCardContext): void {
+  const onDraftChange = context.onDraftChange;
+  const onSave = context.onSave;
+  const onCancelEdit = context.onCancelEdit;
+  if (!onDraftChange || !onSave || !onCancelEdit) {
+    return;
+  }
+
+  let draft = { ...context.draft };
+  const panel = content.createDiv({ cls: "side-comments-card-edit" });
+
+  const appearanceRow = panel.createDiv({ cls: "side-comments-card-edit-row side-comments-card-edit-row--appearance" });
+
+  const markTypeSelect = appearanceRow.createEl("select", { cls: "side-comments-card-edit-select" });
+  for (const value of ["highlight", "underline", "strikethrough", "note"] as MarkType[]) {
+    const option = markTypeSelect.createEl("option", { text: markLabel(value, context.t) });
+    option.value = value;
+  }
+  markTypeSelect.value = draft.markType;
+  markTypeSelect.addEventListener("change", () => {
+    draft = { ...draft, markType: markTypeSelect.value as MarkType };
+    onDraftChange(comment.id, draft);
+  });
+
+  const colorSelect = appearanceRow.createEl("select", { cls: "side-comments-card-edit-select" });
+  for (const value of ["yellow", "blue", "red", "green", "purple"] as MarkColor[]) {
     const option = colorSelect.createEl("option", { text: colorLabel(value, context.t) });
     option.value = value;
   }
   colorSelect.value = draft.color;
   colorSelect.addEventListener("change", () => {
-    draft = {
-      ...draft,
-      color: colorSelect.value as CommentDraft["color"]
-    };
-    context.onDraftChange(comment.id, draft);
+    draft = { ...draft, color: colorSelect.value as MarkColor };
+    onDraftChange(comment.id, draft);
   });
 
-  const statusSelect = typeRow.createEl("select");
+  const statusSelect = appearanceRow.createEl("select", { cls: "side-comments-card-edit-select" });
   for (const value of ["active", "resolved"] as const) {
     const option = statusSelect.createEl("option", { text: statusLabel(value, context.t) });
     option.value = value;
   }
   statusSelect.value = draft.status === "orphaned" ? "active" : draft.status;
   statusSelect.addEventListener("change", () => {
-    draft = {
-      ...draft,
-      status: statusSelect.value as CommentDraft["status"]
-    };
-    context.onDraftChange(comment.id, draft);
+    draft = { ...draft, status: statusSelect.value as CommentDraft["status"] };
+    onDraftChange(comment.id, draft);
   });
 
-  const textarea = container.createEl("textarea", {
-    cls: "side-comments-card-textarea",
-    attr: {
-      rows: "4",
-      placeholder: context.t("card.notePlaceholder")
-    }
-  });
-  textarea.value = draft.noteContent;
-  textarea.focus();
-  textarea.addEventListener("input", () => {
-    draft = {
-      ...draft,
-      noteContent: textarea.value
-    };
-    context.onDraftChange(comment.id, draft);
-  });
-  textarea.addEventListener("keydown", (event) => {
-    if (event.isComposing) {
-      return;
-    }
+  const classificationRow = panel.createDiv({ cls: "side-comments-card-edit-row side-comments-card-edit-row--classification" });
 
-    if (event.key === "Escape") {
-      event.preventDefault();
-      context.onCancelEdit(comment.id);
-      return;
-    }
-
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      draft = {
-        ...draft,
-        noteContent: textarea.value,
-        markType: typeSelect.value as CommentDraft["markType"],
-        color: colorSelect.value as CommentDraft["color"],
-        status: statusSelect.value as CommentDraft["status"]
-      };
-      context.onSave(comment.id, draft);
-    }
-  });
-
-  const actionRow = container.createDiv({ cls: "side-comments-card-edit-actions" });
-  createActionButton(actionRow, context.t("action.save.short"), context.t("action.save"), () => {
-    draft = {
-      ...draft,
-      noteContent: textarea.value,
-      markType: typeSelect.value as CommentDraft["markType"],
-      color: colorSelect.value as CommentDraft["color"],
-      status: statusSelect.value as CommentDraft["status"]
-    };
-    context.onSave(comment.id, draft);
-  });
-  createActionButton(actionRow, context.t("action.cancel.short"), context.t("action.cancel"), () => {
-    context.onCancelEdit(comment.id);
-  });
-}
-
-function renderOrganizationFields(container: HTMLElement, comment: SideComment, context: CommentCardContext): void {
-  const currentType = getAnnotationType(comment);
-  const currentTags = normalizeTags(comment.tags);
-
-  const row = container.createDiv({ cls: "side-comments-card-organization" });
-  const typeSelect = row.createEl("select", {
-    cls: "side-comments-annotation-type-select",
-    attr: {
-      title: context.t("annotationType.defaultTooltip"),
-      "aria-label": context.t("annotationType.placeholder")
-    }
-  });
+  const typeSelect = classificationRow.createEl("select", { cls: "side-comments-card-edit-select side-comments-annotation-type-select" });
   for (const type of ANNOTATION_TYPES) {
     const option = typeSelect.createEl("option", { text: annotationTypeLabel(type, context.t) });
     option.value = type;
   }
-  typeSelect.value = currentType;
+  typeSelect.value = draft.annotationType;
   typeSelect.addEventListener("change", () => {
-    context.onSetAnnotationType(comment.id, typeSelect.value as AnnotationType);
+    draft = { ...draft, annotationType: typeSelect.value as AnnotationType };
+    onDraftChange(comment.id, draft);
   });
 
-  const tagEditor = row.createDiv({ cls: "side-comments-tag-editor" });
-  tagEditor.createSpan({ cls: "side-comments-tag-label", text: context.t("tags.label") });
+  const tagEditor = classificationRow.createDiv({ cls: "side-comments-tag-editor" });
   const chips = tagEditor.createDiv({ cls: "side-comments-tag-chips" });
-
-  const updateTags = (tags: string[]) => {
-    context.onSetTags(comment.id, tags);
+  const renderTagChips = () => {
+    chips.empty();
+    const currentTags = draft.tags;
+    if (currentTags.length === 0) {
+      chips.createSpan({ cls: "side-comments-tag-empty", text: context.t("tags.empty") });
+    }
+    for (const tag of currentTags) {
+      const chip = chips.createSpan({ cls: "side-comments-tag-chip" });
+      chip.createSpan({ text: tag });
+      const remove = chip.createEl("button", {
+        cls: "side-comments-tag-remove",
+        attr: { type: "button", title: context.t("tags.remove"), "aria-label": context.t("tags.remove") }
+      });
+      remove.setText("×");
+      remove.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        draft = {
+          ...draft,
+          tags: currentTags.filter((item) => normalizeTagKey(item) !== normalizeTagKey(tag))
+        };
+        onDraftChange(comment.id, draft);
+        renderTagChips();
+      });
+    }
   };
-
-  for (const tag of currentTags) {
-    const chip = chips.createSpan({ cls: "side-comments-tag-chip" });
-    chip.createSpan({ text: tag });
-    const remove = chip.createEl("button", {
-      cls: "side-comments-tag-remove",
-      attr: {
-        type: "button",
-        title: context.t("tags.remove"),
-        "aria-label": context.t("tags.remove")
-      }
-    });
-    remove.setText("x");
-    remove.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      updateTags(currentTags.filter((item) => normalizeTagKey(item) !== normalizeTagKey(tag)));
-    });
-  }
-
-  if (currentTags.length === 0) {
-    chips.createSpan({ cls: "side-comments-tag-empty", text: context.t("tags.empty") });
-  }
+  renderTagChips();
 
   const listId = `side-comments-tag-options-${comment.id}`;
   const dataList = tagEditor.createEl("datalist");
   dataList.id = listId;
-  const existingKeys = new Set(currentTags.map((tag) => normalizeTagKey(tag)));
+  const existingKeys = new Set(draft.tags.map((tag) => normalizeTagKey(tag)));
   for (const suggestion of context.tagSuggestions) {
     if (existingKeys.has(normalizeTagKey(suggestion))) {
       continue;
@@ -336,7 +362,7 @@ function renderOrganizationFields(container: HTMLElement, comment: SideComment, 
     option.value = suggestion;
   }
 
-  const input = tagEditor.createEl("input", {
+  const tagInput = tagEditor.createEl("input", {
     cls: "side-comments-tag-input",
     attr: {
       type: "text",
@@ -345,48 +371,77 @@ function renderOrganizationFields(container: HTMLElement, comment: SideComment, 
       "aria-label": context.t("tags.placeholder")
     }
   });
-  input.addEventListener("keydown", (event) => {
+  tagInput.addEventListener("keydown", (event) => {
     if (event.isComposing || event.key !== "Enter") {
       return;
     }
     event.preventDefault();
-    const tags = normalizeTags([...currentTags, input.value]);
-    if (tags.length !== currentTags.length) {
-      updateTags(tags);
-      input.value = "";
+    const merged = normalizeTags([...draft.tags, tagInput.value]);
+    if (merged.length !== draft.tags.length) {
+      draft = { ...draft, tags: merged };
+      onDraftChange(comment.id, draft);
+      tagInput.value = "";
+      renderTagChips();
     }
+  });
+
+  const textarea = panel.createEl("textarea", {
+    cls: "side-comments-card-textarea",
+    attr: { rows: "4", placeholder: context.t("card.notePlaceholder") }
+  });
+  textarea.value = draft.noteContent;
+  textarea.focus();
+  textarea.addEventListener("input", () => {
+    draft = { ...draft, noteContent: textarea.value };
+    onDraftChange(comment.id, draft);
+  });
+  textarea.addEventListener("keydown", (event) => {
+    if (event.isComposing) {
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onCancelEdit(comment.id);
+      return;
+    }
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      onSave(comment.id, { ...draft, noteContent: textarea.value });
+    }
+  });
+
+  const actionRow = panel.createDiv({ cls: "side-comments-card-edit-actions" });
+  const cancelBtn = actionRow.createEl("button", {
+    cls: "side-comments-card-edit-cancel",
+    attr: { type: "button" },
+    text: context.t("action.cancel")
+  });
+  cancelBtn.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onCancelEdit(comment.id);
+  });
+
+  const saveBtn = actionRow.createEl("button", {
+    cls: "side-comments-card-edit-save mod-cta",
+    attr: { type: "button" },
+    text: context.t("action.save")
+  });
+  saveBtn.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onSave(comment.id, { ...draft, noteContent: textarea.value });
   });
 }
 
-function createActionButton(
-  container: HTMLElement,
-  shortLabel: string,
-  label: string,
-  onClick: () => void,
-  disabled = false
-): HTMLButtonElement {
-  const button = container.createEl("button", {
-    cls: "side-comments-card-button",
-    attr: {
-      type: "button",
-      title: label,
-      "aria-label": label
-    }
-  });
-  button.createSpan({ cls: "side-comments-card-button-label", text: shortLabel });
-  button.disabled = disabled;
-  button.addEventListener("mousedown", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-  });
-  button.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    if (!button.disabled) {
-      onClick();
-    }
-  });
-  return button;
+function buildAnchorContextPreview(comment: SideComment): string {
+  const before = comment.anchor.context?.before ?? comment.anchor.prefix;
+  const after = comment.anchor.context?.after ?? comment.anchor.suffix;
+  return `${before}[${comment.anchor.selectedText}]${after}`.trim() || comment.anchor.selectedText;
+}
+
+function isInteractiveTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && Boolean(target.closest("button, input, select, textarea, a"));
 }
 
 export function markLabel(commentOrMarkType: SideComment | SideComment["mark"]["type"], t: Translator): string {
@@ -401,22 +456,17 @@ export function markLabel(commentOrMarkType: SideComment | SideComment["mark"]["
   if (markType === "underline") {
     return t("filter.type.underline");
   }
+  if (markType === "note") {
+    return t("toolbar.note");
+  }
   return t("filter.type.strikethrough");
 }
 
 export function colorLabel(color: MarkColor, t: Translator): string {
-  if (color === "yellow") {
-    return t("filter.color.yellow");
-  }
-  if (color === "blue") {
-    return t("filter.color.blue");
-  }
-  if (color === "red") {
-    return t("filter.color.red");
-  }
-  if (color === "green") {
-    return t("filter.color.green");
-  }
+  if (color === "yellow") return t("filter.color.yellow");
+  if (color === "blue")   return t("filter.color.blue");
+  if (color === "red")    return t("filter.color.red");
+  if (color === "green")  return t("filter.color.green");
   return t("filter.color.purple");
 }
 
@@ -425,12 +475,8 @@ function isCommentLikeMark(comment: SideComment): boolean {
 }
 
 export function statusLabel(status: SideCommentStatus, t: Translator): string {
-  if (status === "active") {
-    return t("filter.status.active");
-  }
-  if (status === "resolved") {
-    return t("filter.status.resolved");
-  }
+  if (status === "active")   return t("filter.status.active");
+  if (status === "resolved") return t("filter.status.resolved");
   return t("filter.status.orphaned");
 }
 

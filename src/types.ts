@@ -1,17 +1,17 @@
 export const CURRENT_SCHEMA_VERSION = 1;
 export const DATA_DIR = ".obsidian-side-comments";
 
-export type MarkType = "highlight" | "underline" | "strikethrough";
+export type MarkType = "highlight" | "underline" | "strikethrough" | "note";
 export type MarkColor = "yellow" | "blue" | "red" | "green" | "purple";
 export type SideCommentStatus = "active" | "resolved" | "orphaned";
-export type SidebarDisplayMode = "normal" | "compact";
 export type MarkFilter = "all" | MarkType | "comment";
 export type ColorFilter = "all" | MarkColor;
 export type StatusFilter = "all" | SideCommentStatus;
-export type SelectionAction = "highlight" | "underline" | "strikethrough" | "comment";
+export type SelectionAction = "highlight" | "underline" | "strikethrough" | "note";
 export type AnchorSourceMode = "source" | "reading";
 export type AnnotationType = "excerpt" | "question" | "thought" | "task";
 export type AnnotationTypeFilter = "all" | AnnotationType;
+export type InterfaceLanguage = "auto" | "zh" | "en";
 
 export interface TextAnchor {
   startOffset: number;
@@ -74,8 +74,7 @@ export interface SideCommentsManifest {
 export interface PluginSettings {
   autoOpenSidebarAfterCreate: boolean;
   showResolvedMarks: boolean;
-  showResolvedComments: boolean;
-  sidebarDisplayMode: SidebarDisplayMode;
+  language: InterfaceLanguage;
   maxCachedDocuments: number;
   relocateDebounceMs: number;
   dataDir: typeof DATA_DIR;
@@ -99,6 +98,7 @@ export interface CommentCreateInput {
   color: MarkColor;
   sourceMode: AnchorSourceMode;
   annotationType?: AnnotationType;
+  noteContent?: string;
 }
 
 export interface CommentUpdateInput {
@@ -130,6 +130,7 @@ export interface RecentPreviewItem {
     status: SideCommentStatus;
     annotationType?: AnnotationType;
     tags?: string[];
+    updatedAt: string;
   }[];
 }
 
@@ -153,7 +154,7 @@ export interface SideCommentExportDocumentEntry {
 
 export interface SideCommentsExportPackage {
   format: "side-comments-export";
-  formatVersion: 1;
+  exportFormatVersion: 2;
   pluginVersion: string;
   exportedAt: string;
   scope: MaintenanceExportScope;
@@ -161,4 +162,42 @@ export interface SideCommentsExportPackage {
     name?: string;
   };
   documents: SideCommentExportDocumentEntry[];
+}
+
+export interface SideCommentsImportPackage {
+  format: "side-comments-export";
+  exportFormatVersion: 1 | 2;
+  pluginVersion: string;
+  exportedAt: string;
+  scope: MaintenanceExportScope;
+  vault?: {
+    name?: string;
+  };
+  documents: SideCommentExportDocumentEntry[];
+  defaultedCommentIds: string[];
+}
+
+export type MaintenanceImportMode = "restore-original" | "into-current";
+
+export type HealthCheckScope = "current-note" | "selected-notes" | "all-sidecars";
+export type HealthSeverity = "error" | "warning" | "info";
+export type HealthIssueType = "missing-source" | "orphaned-anchor" | "duplicate-anchor" | "structure";
+
+export interface HealthIssue {
+  id: string;
+  type: HealthIssueType;
+  severity: HealthSeverity;
+  filePath: string;
+  title: string;
+  detail: string;
+  commentIds: string[];
+}
+
+export interface HealthReport {
+  generatedAt: string;
+  scope: HealthCheckScope;
+  scannedDocumentCount: number;
+  scannedSidecarCount: number;
+  totalAnnotationCount: number;
+  issues: HealthIssue[];
 }

@@ -13,25 +13,34 @@ import type { EditorView } from "@codemirror/view";
 import { registerSideCommentCommands } from "./src/commands/commands";
 import { createSideCommentsEditorExtension } from "./src/editor/editorExtension";
 import { SelectionToolbar, type SelectionToolbarAction } from "./src/editor/selectionToolbar";
+import { AdvancedCreationModal } from "./src/editor/advancedCreationModal";
 import { renderReadingViewMarks } from "./src/editor/readingViewRenderer";
 import { DEFAULT_SETTINGS, loadSideCommentsSettings, saveSideCommentsSettings } from "./src/settings/settings";
 import { SideCommentsSettingTab } from "./src/settings/settingsTab";
 import { SidecarStore } from "./src/storage/sidecarStore";
 import { normalizeVaultRelativePath } from "./src/storage/pathHash";
 import { createExportPackage, exportPackageToMarkdown, serializeExportPackage } from "./src/storage/export";
+import { createBackupBatch } from "./src/storage/backup";
 import { formatAnnotationMarkdownDraft, type AnnotationDraftGroup } from "./src/organization/markdownDraft";
 import { SideCommentsSidebarView, SIDE_COMMENTS_VIEW_TYPE } from "./src/views/sidebarView";
 import { SideCommentsCrossNoteView, SIDE_COMMENTS_CROSS_NOTE_VIEW_TYPE } from "./src/views/crossNoteView";
+import { SideCommentsHealthView, SIDE_COMMENTS_HEALTH_VIEW_TYPE } from "./src/views/healthView";
 import { createTranslator, type Translator } from "./src/i18n";
 import type {
   AnchorSourceMode,
+  HealthCheckScope,
+  HealthIssue,
+  HealthIssueType,
+  HealthReport,
+  MaintenanceImportMode,
   CommentUpdateInput,
   MaintenanceExportFormat,
   MaintenanceExportScope,
   PluginSettings,
   SideComment,
   SideCommentDocument,
-  SideCommentExportDocumentEntry
+  SideCommentExportDocumentEntry,
+  SideCommentsImportPackage
 } from "./src/types";
 
 type CurrentDocumentLoadState = "none" | "ready" | "failed";
@@ -51,13 +60,20 @@ export default class SideCommentsPlugin extends Plugin {
 
   async onload(): Promise<void> {
     this.settings = await loadSideCommentsSettings(this);
-    this.t = createTranslator(getLanguage());
+    this.refreshTranslator();
     this.store = new SidecarStore(this.app, this.settings);
     await this.store.ensureManifest(this.manifest.version);
 
-    this.selectionToolbar = new SelectionToolbar(document.body, (action) => {
-      void this.handleSelectionAction(action);
-    }, this.t);
+    this.selectionToolbar = new SelectionToolbar(
+      document.body,
+      (action) => {
+        void this.handleSelectionAction(action);
+      },
+      () => {
+        this.openAdvancedCreate();
+      },
+      this.t
+    );
 
     this.registerEditorExtension(createSideCommentsEditorExtension(this));
     this.registerMarkdownPostProcessor((el, ctx) => {
@@ -71,6 +87,10 @@ export default class SideCommentsPlugin extends Plugin {
     this.registerView(
       SIDE_COMMENTS_CROSS_NOTE_VIEW_TYPE,
       (leaf: WorkspaceLeaf) => new SideCommentsCrossNoteView(leaf, this)
+    );
+    this.registerView(
+      SIDE_COMMENTS_HEALTH_VIEW_TYPE,
+      (leaf: WorkspaceLeaf) => new SideCommentsHealthView(leaf, this)
     );
 
     registerSideCommentCommands(this);
@@ -117,6 +137,7 @@ export default class SideCommentsPlugin extends Plugin {
     this.selectionToolbar = null;
     this.app.workspace.detachLeavesOfType(SIDE_COMMENTS_VIEW_TYPE);
     this.app.workspace.detachLeavesOfType(SIDE_COMMENTS_CROSS_NOTE_VIEW_TYPE);
+    this.app.workspace.detachLeavesOfType(SIDE_COMMENTS_HEALTH_VIEW_TYPE);
   }
 
   async saveSettings(): Promise<void> {
@@ -125,9 +146,18 @@ export default class SideCommentsPlugin extends Plugin {
     this.refreshAllViews();
   }
 
+  refreshTranslator(): void {
+    const locale = this.settings.language === "auto" ? getLanguage() : this.settings.language;
+    this.t = createTranslator(locale);
+  }
+
   getActiveMarkdownFile(): TFile | null {
     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
     return view?.file ?? null;
+  }
+
+  getCurrentDocumentFilePath(): string | null {
+    return this.getActiveMarkdownFile()?.path ?? this.currentDocument?.filePath ?? null;
   }
 
   setCurrentDocument(document: SideCommentDocument | null): void {
@@ -138,6 +168,7 @@ export default class SideCommentsPlugin extends Plugin {
   refreshAllViews(): void {
     this.app.workspace.updateOptions();
     void this.refreshSidebar();
+    void this.refreshCrossNoteReview();
   }
 
   areAnnotationMarksHidden(): boolean {
@@ -173,11 +204,7 @@ export default class SideCommentsPlugin extends Plugin {
     let leaf: WorkspaceLeaf | null = leaves[0] ?? null;
 
     if (!leaf) {
-      leaf = this.app.workspace.getRightLeaf(false);
-      if (!leaf) {
-        new Notice(this.t("notice.openSidebarFailed"));
-        return;
-      }
+      leaf = this.app.workspace.getLeaf("tab");
       await leaf.setViewState({ type: SIDE_COMMENTS_CROSS_NOTE_VIEW_TYPE, active: true });
     }
 
@@ -185,6 +212,22 @@ export default class SideCommentsPlugin extends Plugin {
     const view = leaf.view;
     if (view instanceof SideCommentsCrossNoteView) {
       await view.refresh();
+    }
+  }
+
+  async activateHealthReport(report: HealthReport, issueTypeFilter: HealthIssueType | null = null): Promise<void> {
+    const leaves = this.app.workspace.getLeavesOfType(SIDE_COMMENTS_HEALTH_VIEW_TYPE);
+    let leaf: WorkspaceLeaf | null = leaves[0] ?? null;
+
+    if (!leaf) {
+      leaf = this.app.workspace.getLeaf("tab");
+      await leaf.setViewState({ type: SIDE_COMMENTS_HEALTH_VIEW_TYPE, active: true });
+    }
+
+    this.app.workspace.revealLeaf(leaf);
+    const view = leaf.view;
+    if (view instanceof SideCommentsHealthView) {
+      view.setReport(report, issueTypeFilter);
     }
   }
 
@@ -260,25 +303,79 @@ export default class SideCommentsPlugin extends Plugin {
   }
 
   private async handleSelectionAction(action: SelectionToolbarAction): Promise<void> {
+    const ctx = this.captureCurrentSelectionContext();
+    if (!ctx) {
+      return;
+    }
+    await this.createAnnotationFromOffsets(
+      ctx.filePath,
+      ctx.sourceText,
+      ctx.startOffset,
+      ctx.endOffset,
+      action,
+      ctx.sourceMode
+    );
+  }
+
+  private openAdvancedCreate(): void {
+    const ctx = this.captureCurrentSelectionContext();
+    if (!ctx) {
+      return;
+    }
+    new AdvancedCreationModal(this.app, this, (action) => {
+      void this.createAnnotationFromOffsets(
+        ctx.filePath,
+        ctx.sourceText,
+        ctx.startOffset,
+        ctx.endOffset,
+        action,
+        ctx.sourceMode
+      );
+    }).open();
+  }
+
+  private captureCurrentSelectionContext(): {
+    filePath: string;
+    sourceText: string;
+    startOffset: number;
+    endOffset: number;
+    sourceMode: "source" | "reading";
+  } | null {
+    if (this.annotationMarksHidden) {
+      new Notice(this.t("marks.createDisabled"));
+      return null;
+    }
+
     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
     if (!view?.file) {
-      return;
+      new Notice(this.t("notice.openMarkdownFirst"));
+      return null;
     }
 
     if (view.getMode() === "source") {
-      await this.createAnnotationFromObsidianEditor(view.editor, view.file, action);
-      return;
+      if (!view.editor.somethingSelected()) {
+        new Notice(this.t("notice.selectTextFirst"));
+        return null;
+      }
+      return {
+        filePath: view.file.path,
+        sourceText: view.editor.getValue(),
+        startOffset: view.editor.posToOffset(view.editor.getCursor("from")),
+        endOffset: view.editor.posToOffset(view.editor.getCursor("to")),
+        sourceMode: "source"
+      };
     }
 
     const selection = window.getSelection();
     if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
-      return;
+      new Notice(this.t("notice.selectTextFirst"));
+      return null;
     }
 
     const range = selection.getRangeAt(0);
-    const previewRoot = view.previewMode.containerEl;
-    if (!previewRoot.contains(range.commonAncestorContainer)) {
-      return;
+    if (!view.previewMode.containerEl.contains(range.commonAncestorContainer)) {
+      new Notice(this.t("notice.selectTextFirst"));
+      return null;
     }
 
     const sourceText = view.getViewData();
@@ -286,10 +383,16 @@ export default class SideCommentsPlugin extends Plugin {
     const match = findSelectedTextInSource(sourceText, selectedText);
     if (!match) {
       new Notice(this.t("notice.mapSelectionFailed"));
-      return;
+      return null;
     }
 
-    await this.createAnnotationFromOffsets(view.file.path, sourceText, match.startOffset, match.endOffset, action, "reading");
+    return {
+      filePath: view.file.path,
+      sourceText,
+      startOffset: match.startOffset,
+      endOffset: match.endOffset,
+      sourceMode: "reading"
+    };
   }
 
   private syncSelectionToolbar(): void {
@@ -476,14 +579,16 @@ export default class SideCommentsPlugin extends Plugin {
         markType: action.type,
         color: action.color,
         sourceMode,
-        annotationType: action.annotationType ?? "excerpt"
+        annotationType: action.annotationType ?? "excerpt",
+        noteContent: action.initialNote
       });
 
       this.currentDocument = result.document;
       this.currentDocumentLoadState = "ready";
       this.refreshAllViews();
 
-      if (this.settings.autoOpenSidebarAfterCreate || !result.created) {
+      const forceEdit = action.type === "note";
+      if (this.settings.autoOpenSidebarAfterCreate || !result.created || forceEdit) {
         await this.focusCommentInSidebar(result.comment.id, true);
       }
     } catch (error) {
@@ -500,6 +605,24 @@ export default class SideCommentsPlugin extends Plugin {
   async setCommentStatus(commentId: string, status: SideComment["status"]): Promise<SideCommentDocument> {
     const document = this.requireCurrentDocument();
     return this.store.setCommentStatus(document.filePath, commentId, status);
+  }
+
+  async previewRebindOrphanedComment(commentId: string): Promise<{ comment: SideComment; selectedText: string } | null> {
+    const document = this.requireCurrentDocument();
+    const comment = document.comments.find((item) => item.id === commentId);
+    if (!comment || comment.status !== "orphaned") {
+      return null;
+    }
+
+    const selection = this.getCurrentMarkdownSelection("bind");
+    if (!selection) {
+      return null;
+    }
+
+    return {
+      comment,
+      selectedText: selection.sourceText.slice(selection.startOffset, selection.endOffset)
+    };
   }
 
   async deleteComment(commentId: string): Promise<SideCommentDocument> {
@@ -520,6 +643,7 @@ export default class SideCommentsPlugin extends Plugin {
     }
 
     try {
+      await this.backupFileSidecar(document.filePath, "rebind");
       return await this.store.updateCommentAnchor(
         document.filePath,
         commentId,
@@ -564,6 +688,161 @@ export default class SideCommentsPlugin extends Plugin {
     }
   }
 
+  async importAnnotationPackage(importPackage: SideCommentsImportPackage, mode: MaintenanceImportMode): Promise<void> {
+    const currentFilePath = this.getCurrentDocumentFilePath();
+    if (mode === "into-current" && !currentFilePath) {
+      new Notice(this.t("notice.openMarkdownFirst"));
+      return;
+    }
+
+    const grouped = new Map<string, SideComment[]>();
+    for (const document of importPackage.documents) {
+      const targetPath = mode === "into-current" ? currentFilePath! : document.filePath;
+      grouped.set(targetPath, [...(grouped.get(targetPath) ?? []), ...document.comments]);
+    }
+
+    const targets = await Promise.all([...grouped.keys()].map(async (filePath) => ({
+      filePath,
+      sidecarPath: await this.store.getSidecarPathForFile(filePath)
+    })));
+    await createBackupBatch({
+      adapter: this.app.vault.adapter,
+      operation: "import",
+      targets,
+      dataDir: this.store.getDataDir()
+    });
+
+    for (const [filePath, incoming] of grouped) {
+      const existing = await this.store.loadDocument(filePath);
+      const existingIds = new Set(existing.comments.map((comment) => comment.id));
+      const existingAnchors = new Set(existing.comments.map((comment) => anchorKey(comment)));
+      const toAdd = incoming.filter((comment) => !existingIds.has(comment.id) && !existingAnchors.has(anchorKey(comment)));
+      if (toAdd.length === 0) {
+        continue;
+      }
+      await this.store.saveDocument({
+        ...existing,
+        comments: [...existing.comments, ...toAdd]
+      });
+    }
+
+    const currentFile = this.getActiveMarkdownFile();
+    if (currentFile) {
+      await this.loadForFile(currentFile);
+    } else {
+      this.refreshAllViews();
+    }
+    new Notice(this.t("import.success"));
+  }
+
+  async runHealthCheck(scope: HealthCheckScope, filePaths?: string[]): Promise<HealthReport> {
+    const entries = await this.resolveHealthEntries(scope, filePaths);
+    const issues: HealthIssue[] = [];
+
+    for (const entry of entries) {
+      const source = this.app.vault.getAbstractFileByPath(entry.filePath);
+      if (!(source instanceof TFile)) {
+        issues.push({
+          id: `missing-source:${entry.filePath}`,
+          type: "missing-source",
+          severity: "error",
+          filePath: entry.filePath,
+          title: this.t("health.issue.missingSource"),
+          detail: entry.filePath,
+          commentIds: []
+        });
+      }
+
+      for (const comment of entry.comments) {
+        if (comment.status === "orphaned") {
+          issues.push({
+            id: `orphaned:${entry.filePath}:${comment.id}`,
+            type: "orphaned-anchor",
+            severity: "warning",
+            filePath: entry.filePath,
+            title: this.t("health.issue.orphaned"),
+            detail: comment.anchor.selectedText || comment.note.content,
+            commentIds: [comment.id]
+          });
+        }
+      }
+
+      const duplicates = new Map<string, SideComment[]>();
+      for (const comment of entry.comments) {
+        const key = anchorKey(comment);
+        duplicates.set(key, [...(duplicates.get(key) ?? []), comment]);
+      }
+      for (const group of duplicates.values()) {
+        if (group.length < 2) {
+          continue;
+        }
+        issues.push({
+          id: `duplicate:${entry.filePath}:${group.map((comment) => comment.id).join(",")}`,
+          type: "duplicate-anchor",
+          severity: "warning",
+          filePath: entry.filePath,
+          title: this.t("health.issue.duplicate"),
+          detail: group[0]?.anchor.selectedText ?? "",
+          commentIds: group.map((comment) => comment.id)
+        });
+      }
+    }
+
+    return {
+      generatedAt: new Date().toISOString(),
+      scope,
+      scannedDocumentCount: new Set(entries.map((entry) => entry.filePath)).size,
+      scannedSidecarCount: entries.length,
+      totalAnnotationCount: entries.reduce((total, entry) => total + entry.comments.length, 0),
+      issues
+    };
+  }
+
+  async runAndOpenHealthCheck(scope: HealthCheckScope, filePaths?: string[], issueTypeFilter: HealthIssueType | null = null): Promise<void> {
+    const report = await this.runHealthCheck(scope, filePaths);
+    await this.activateHealthReport(report, issueTypeFilter);
+  }
+
+  async mergeDuplicateComments(filePath: string, primaryCommentId: string, commentIdsToRemove: string[], mergedNoteContent: string): Promise<void> {
+    await this.backupFileSidecar(filePath, "dedup");
+    const updated = await this.store.mergeComments(filePath, primaryCommentId, commentIdsToRemove, mergedNoteContent);
+    if (this.currentDocument?.filePath === updated.filePath) {
+      this.setCurrentDocument(updated);
+    }
+    this.refreshAllViews();
+  }
+
+  async deleteDuplicateComments(filePath: string, commentIds: string[]): Promise<void> {
+    await this.backupFileSidecar(filePath, "dedup");
+    const updated = await this.store.deleteComments(filePath, commentIds);
+    if (this.currentDocument?.filePath === updated.filePath) {
+      this.setCurrentDocument(updated);
+    }
+    this.refreshAllViews();
+  }
+
+  async cleanupMissingSourceAnnotations(filePath: string): Promise<void> {
+    await createBackupBatch({
+      adapter: this.app.vault.adapter,
+      operation: "cleanup",
+      dataDir: this.store.getDataDir(),
+      targets: [{
+        filePath,
+        sidecarPath: await this.store.getSidecarPathForFile(filePath)
+      }]
+    });
+    await this.store.deleteDocumentSidecar(filePath);
+    if (this.currentDocument?.filePath === normalizeVaultRelativePath(filePath)) {
+      this.setCurrentDocument(null);
+    }
+    this.refreshAllViews();
+    new Notice(this.t("repair.cleanupMissingSourceSuccess"));
+  }
+
+  async getCommentsForFile(filePath: string): Promise<SideComment[]> {
+    return (await this.store.loadDocument(filePath)).comments;
+  }
+
   async focusCommentInSidebar(commentId: string, edit = false): Promise<void> {
     await this.activateSidebar();
     for (const view of this.getSidebarViews()) {
@@ -594,14 +873,14 @@ export default class SideCommentsPlugin extends Plugin {
   }
 
   async exportCurrentNoteAnnotations(format: MaintenanceExportFormat): Promise<void> {
-    const file = this.getActiveMarkdownFile();
-    if (!file) {
+    const filePath = this.getCurrentDocumentFilePath();
+    if (!filePath) {
       new Notice(this.t("notice.openMarkdownFirst"));
       return;
     }
 
     try {
-      const entry = await this.store.loadExportEntryForFile(file.path);
+      const entry = await this.store.loadExportEntryForFile(filePath);
       await this.writeMaintenanceExport("current-note", format, entry ? [entry] : []);
     } catch (error) {
       console.error("Side Comments failed to export current note", error);
@@ -693,6 +972,12 @@ export default class SideCommentsPlugin extends Plugin {
     }
   }
 
+  async refreshCrossNoteReview(): Promise<void> {
+    for (const view of this.getCrossNoteViews()) {
+      await view.refresh();
+    }
+  }
+
   private async writeMaintenanceExport(
     scope: MaintenanceExportScope,
     format: MaintenanceExportFormat,
@@ -716,6 +1001,28 @@ export default class SideCommentsPlugin extends Plugin {
     new Notice(this.t("export.success"));
   }
 
+  private async backupFileSidecar(filePath: string, operation: "rebind" | "dedup"): Promise<void> {
+    await createBackupBatch({
+      adapter: this.app.vault.adapter,
+      operation,
+      dataDir: this.store.getDataDir(),
+      targets: [{
+        filePath,
+        sidecarPath: await this.store.getSidecarPathForFile(filePath)
+      }]
+    });
+  }
+
+  private async resolveHealthEntries(scope: HealthCheckScope, filePaths?: string[]): Promise<SideCommentExportDocumentEntry[]> {
+    if (scope === "all-sidecars") {
+      return this.store.loadAllExportEntries();
+    }
+
+    const currentFilePath = this.getCurrentDocumentFilePath();
+    const paths = filePaths?.length ? filePaths : currentFilePath ? [currentFilePath] : [];
+    return this.store.listSelectedExportEntries(paths);
+  }
+
   private async ensureAdapterFolder(folderPath: string): Promise<void> {
     const parts = folderPath.split("/");
     let current = "";
@@ -733,6 +1040,13 @@ export default class SideCommentsPlugin extends Plugin {
       .getLeavesOfType(SIDE_COMMENTS_VIEW_TYPE)
       .map((leaf) => leaf.view)
       .filter((view): view is SideCommentsSidebarView => view instanceof SideCommentsSidebarView);
+  }
+
+  private getCrossNoteViews(): SideCommentsCrossNoteView[] {
+    return this.app.workspace
+      .getLeavesOfType(SIDE_COMMENTS_CROSS_NOTE_VIEW_TYPE)
+      .map((leaf) => leaf.view)
+      .filter((view): view is SideCommentsCrossNoteView => view instanceof SideCommentsCrossNoteView);
   }
 
   private requireCurrentDocument(): SideCommentDocument {
@@ -845,6 +1159,10 @@ export default class SideCommentsPlugin extends Plugin {
       console.error("Side Comments failed to render reading view marks", error);
     }
   }
+}
+
+function anchorKey(comment: SideComment): string {
+  return `${comment.anchor.startOffset}:${comment.anchor.endOffset}:${comment.anchor.selectedText}`;
 }
 
 function formatTimestamp(date: Date): string {

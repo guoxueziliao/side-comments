@@ -1,11 +1,10 @@
-import { ItemView, WorkspaceLeaf } from "obsidian";
+import { ItemView, Menu, setIcon, WorkspaceLeaf } from "obsidian";
 import type SideCommentsPlugin from "../../main";
 import { sortComments } from "../storage/migration";
 import type {
   AnnotationType,
   ColorFilter,
   CommentDraft,
-  SidebarDisplayMode,
   StatusFilter,
   SideComment
 } from "../types";
@@ -19,13 +18,12 @@ import {
   normalizeTagKey,
   normalizeTags
 } from "../organization/annotationMetadata";
+import { createToolbarButton } from "./shared";
 
 export const SIDE_COMMENTS_VIEW_TYPE = "side-comments-view";
 
 export class SideCommentsSidebarView extends ItemView {
-  private readonly collapsedCommentIds = new Set<string>();
-  private readonly expandedCompactCommentIds = new Set<string>();
-  private readonly expandedResolvedCommentIds = new Set<string>();
+  private readonly expandedCommentIds = new Set<string>();
   private readonly drafts = new Map<string, CommentDraft>();
   private focusedCommentId: string | null = null;
   private editingCommentId: string | null = null;
@@ -78,30 +76,14 @@ export class SideCommentsSidebarView extends ItemView {
     void this.render();
   }
 
-  async setDisplayMode(value: SidebarDisplayMode): Promise<void> {
-    this.plugin.settings.sidebarDisplayMode = value;
-    await this.plugin.saveSettings();
-  }
-
-  async setShowResolvedComments(value: boolean): Promise<void> {
-    this.plugin.settings.showResolvedComments = value;
-    await this.plugin.saveSettings();
-  }
-
   focusComment(commentId: string, edit = false): void {
     this.focusedCommentId = commentId;
-    this.collapsedCommentIds.delete(commentId);
-    this.expandedCompactCommentIds.add(commentId);
+    this.expandedCommentIds.add(commentId);
     const comment = this.findComment(commentId);
-    if (comment?.status === "resolved") {
-      this.expandedResolvedCommentIds.add(commentId);
-    }
     if (edit) {
       this.editingCommentId = commentId;
-      if (!this.drafts.has(commentId)) {
-        if (comment) {
-          this.drafts.set(commentId, draftFromComment(comment));
-        }
+      if (!this.drafts.has(commentId) && comment) {
+        this.drafts.set(commentId, draftFromComment(comment));
       }
     }
     void this.render();
@@ -115,11 +97,7 @@ export class SideCommentsSidebarView extends ItemView {
       return;
     }
     this.editingCommentId = commentId;
-    this.collapsedCommentIds.delete(commentId);
-    this.expandedCompactCommentIds.add(commentId);
-    if (comment.status === "resolved") {
-      this.expandedResolvedCommentIds.add(commentId);
-    }
+    this.expandedCommentIds.add(commentId);
     this.drafts.set(commentId, draftFromComment(comment));
     void this.render();
     this.scrollToComment(commentId);
@@ -160,19 +138,6 @@ export class SideCommentsSidebarView extends ItemView {
 
   async toggleStatus(commentId: string, nextStatus: SideComment["status"]): Promise<void> {
     const updated = await this.plugin.setCommentStatus(commentId, nextStatus);
-    this.expandedResolvedCommentIds.delete(commentId);
-    this.plugin.setCurrentDocument(updated);
-    this.plugin.refreshAllViews();
-  }
-
-  async setCommentAnnotationType(commentId: string, annotationType: AnnotationType): Promise<void> {
-    const updated = await this.plugin.updateComment(commentId, { annotationType });
-    this.plugin.setCurrentDocument(updated);
-    this.plugin.refreshAllViews();
-  }
-
-  async setCommentTags(commentId: string, tags: string[]): Promise<void> {
-    const updated = await this.plugin.updateComment(commentId, { tags });
     this.plugin.setCurrentDocument(updated);
     this.plugin.refreshAllViews();
   }
@@ -185,9 +150,7 @@ export class SideCommentsSidebarView extends ItemView {
 
     const updated = await this.plugin.deleteComment(commentId);
     this.drafts.delete(commentId);
-    this.collapsedCommentIds.delete(commentId);
-    this.expandedCompactCommentIds.delete(commentId);
-    this.expandedResolvedCommentIds.delete(commentId);
+    this.expandedCommentIds.delete(commentId);
     if (this.editingCommentId === commentId) {
       this.editingCommentId = null;
     }
@@ -201,6 +164,14 @@ export class SideCommentsSidebarView extends ItemView {
   }
 
   async rebindComment(commentId: string): Promise<void> {
+    const preview = await this.plugin.previewRebindOrphanedComment(commentId);
+    if (!preview) {
+      return;
+    }
+    const confirmed = window.confirm(`${this.plugin.t("repair.previewChange")}\n\n${preview.comment.anchor.selectedText}\n→\n${preview.selectedText}`);
+    if (!confirmed) {
+      return;
+    }
     const updated = await this.plugin.rebindOrphanedCommentToSelection(commentId);
     if (!updated) {
       return;
@@ -222,41 +193,61 @@ export class SideCommentsSidebarView extends ItemView {
     this.focusComment(commentId, false);
   }
 
+  expandAll(): void {
+    const document = this.plugin.currentDocument;
+    if (!document) {
+      return;
+    }
+    for (const comment of document.comments) {
+      this.expandedCommentIds.add(comment.id);
+    }
+    void this.render();
+  }
+
+  collapseAll(): void {
+    this.expandedCommentIds.clear();
+    void this.render();
+  }
+
   async render(): Promise<void> {
     const content = this.getContentEl();
     content.empty();
     content.addClass("side-comments-sidebar");
 
     const header = content.createDiv({ cls: "side-comments-header" });
-    header.createDiv({ cls: "side-comments-title", text: this.plugin.t("sidebar.title") });
+    const titleRow = header.createDiv({ cls: "side-comments-header-title-row" });
+    titleRow.createDiv({ cls: "side-comments-title", text: this.plugin.t("sidebar.title") });
 
-    const preferenceRow = header.createDiv({ cls: "side-comments-toolbar-row side-comments-toolbar-row--preferences" });
-    const modeGroup = preferenceRow.createDiv({ cls: "side-comments-segmented-control" });
-    for (const [value, label] of [
-      ["normal", this.plugin.t("sidebar.mode.normal")],
-      ["compact", this.plugin.t("sidebar.mode.compact")]
-    ] as const) {
-      createToolbarButton(modeGroup, label, this.plugin.t("sidebar.mode.switch", { label }), () => {
-        void this.setDisplayMode(value);
-      }, this.plugin.settings.sidebarDisplayMode === value);
-    }
-    createToolbarButton(
-      preferenceRow,
-      this.plugin.t("filter.status.resolved"),
-      this.plugin.settings.showResolvedComments ? this.plugin.t("sidebar.hideResolved") : this.plugin.t("sidebar.showResolved"),
-      () => {
-        void this.setShowResolvedComments(!this.plugin.settings.showResolvedComments);
-      },
-      this.plugin.settings.showResolvedComments
-    );
-    createToolbarButton(
-      preferenceRow,
-      this.plugin.areAnnotationMarksHidden() ? this.plugin.t("marks.show") : this.plugin.t("marks.hide"),
-      this.plugin.areAnnotationMarksHidden() ? this.plugin.t("marks.show") : this.plugin.t("marks.hide"),
-      () => {
-        this.plugin.toggleAnnotationMarksHidden();
+    const titleActions = titleRow.createDiv({ cls: "side-comments-header-actions" });
+    const marksToggle = titleActions.createEl("button", {
+      cls: "side-comments-header-icon-btn",
+      attr: {
+        type: "button",
+        title: this.plugin.areAnnotationMarksHidden() ? this.plugin.t("marks.show") : this.plugin.t("marks.hide"),
+        "aria-label": this.plugin.areAnnotationMarksHidden() ? this.plugin.t("marks.show") : this.plugin.t("marks.hide")
       }
-    );
+    });
+    setIcon(marksToggle, this.plugin.areAnnotationMarksHidden() ? "eye-off" : "eye");
+    marksToggle.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.plugin.toggleAnnotationMarksHidden();
+    });
+
+    const headerOverflow = titleActions.createEl("button", {
+      cls: "side-comments-header-icon-btn",
+      attr: {
+        type: "button",
+        title: this.plugin.t("toolbar.more"),
+        "aria-label": this.plugin.t("toolbar.more")
+      }
+    });
+    setIcon(headerOverflow, "more-horizontal");
+    headerOverflow.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.openHeaderMenu(event);
+    });
 
     const exportRow = header.createDiv({ cls: "side-comments-toolbar-row side-comments-toolbar-row--export" });
     createToolbarButton(exportRow, this.plugin.t("export.format.json"), this.plugin.t("export.currentNote"), () => {
@@ -329,7 +320,7 @@ export class SideCommentsSidebarView extends ItemView {
 
     const { document, state } = this.getDocumentState();
     if (state === "failed") {
-      header.createDiv({ cls: "side-comments-subtitle", text: this.plugin.t("empty.crossNote.readFailed") });
+      header.createDiv({ cls: "side-comments-subtitle", text: this.plugin.t("empty.readFailed") });
       content.createDiv({ cls: "side-comments-empty", text: this.plugin.t("empty.readFailed") });
       return;
     }
@@ -352,7 +343,6 @@ export class SideCommentsSidebarView extends ItemView {
     }
 
     const filtered = this.getFilteredComments(document.comments);
-    const hiddenResolvedOnly = this.hasOnlyHiddenResolvedMatches(document.comments);
     header.createDiv({
       cls: "side-comments-subtitle",
       text: this.buildSubtitle(document.comments.length, filtered.length)
@@ -365,12 +355,8 @@ export class SideCommentsSidebarView extends ItemView {
 
     if (filtered.length === 0) {
       const empty = content.createDiv({ cls: "side-comments-empty" });
-      empty.createDiv({ text: hiddenResolvedOnly ? this.plugin.t("empty.resolvedHidden") : this.plugin.t("empty.noMatches") });
-      if (hiddenResolvedOnly) {
-        createToolbarButton(empty, this.plugin.t("sidebar.showResolved"), this.plugin.t("sidebar.showResolved"), () => {
-          void this.setShowResolvedComments(true);
-        });
-      } else if (this.hasActiveFilters()) {
+      empty.createDiv({ text: this.plugin.t("empty.noMatches") });
+      if (this.hasActiveFilters()) {
         createToolbarButton(empty, this.plugin.t("filter.clear"), this.plugin.t("filter.clear"), () => {
           this.clearFilters();
         });
@@ -381,29 +367,16 @@ export class SideCommentsSidebarView extends ItemView {
     for (const comment of filtered) {
       const card = renderCommentCard(content, comment, {
         t: this.plugin.t,
-        displayMode: this.plugin.settings.sidebarDisplayMode,
         expanded: this.isCommentExpanded(comment),
         editing: this.editingCommentId === comment.id,
         flash: this.focusedCommentId === comment.id,
         draft: this.drafts.get(comment.id) ?? draftFromComment(comment),
+        tagSuggestions: availableTags,
         onToggleExpand: (commentId) => {
-          const target = this.findComment(commentId);
-          if (target?.status === "resolved") {
-            if (this.expandedResolvedCommentIds.has(commentId)) {
-              this.expandedResolvedCommentIds.delete(commentId);
-            } else {
-              this.expandedResolvedCommentIds.add(commentId);
-            }
-          } else if (this.plugin.settings.sidebarDisplayMode === "compact") {
-            if (this.expandedCompactCommentIds.has(commentId)) {
-              this.expandedCompactCommentIds.delete(commentId);
-            } else {
-              this.expandedCompactCommentIds.add(commentId);
-            }
-          } else if (this.collapsedCommentIds.has(commentId)) {
-            this.collapsedCommentIds.delete(commentId);
+          if (this.expandedCommentIds.has(commentId)) {
+            this.expandedCommentIds.delete(commentId);
           } else {
-            this.collapsedCommentIds.add(commentId);
+            this.expandedCommentIds.add(commentId);
           }
           void this.render();
         },
@@ -434,14 +407,7 @@ export class SideCommentsSidebarView extends ItemView {
         },
         onDraftChange: (commentId, draft) => {
           this.updateDraft(commentId, draft);
-        },
-        onSetAnnotationType: (commentId, annotationType) => {
-          void this.setCommentAnnotationType(commentId, annotationType);
-        },
-        onSetTags: (commentId, tags) => {
-          void this.setCommentTags(commentId, tags);
-        },
-        tagSuggestions: availableTags
+        }
       });
 
       if (this.focusedCommentId === comment.id) {
@@ -450,6 +416,23 @@ export class SideCommentsSidebarView extends ItemView {
         });
       }
     }
+  }
+
+  private openHeaderMenu(event: MouseEvent): void {
+    const menu = new Menu();
+    menu.addItem((item) => {
+      item
+        .setTitle(this.plugin.t("action.expand"))
+        .setIcon("chevrons-up-down")
+        .onClick(() => this.expandAll());
+    });
+    menu.addItem((item) => {
+      item
+        .setTitle(this.plugin.t("action.collapse"))
+        .setIcon("chevrons-down-up")
+        .onClick(() => this.collapseAll());
+    });
+    menu.showAtMouseEvent(event);
   }
 
   private getContentEl(): HTMLElement {
@@ -470,9 +453,6 @@ export class SideCommentsSidebarView extends ItemView {
     const query = this.searchQuery.trim().toLowerCase();
     const normalizedTagFilters = new Set(this.tagFilters);
     const matches = comments.filter((comment) => {
-      if (!this.plugin.settings.showResolvedComments && comment.status === "resolved") {
-        return false;
-      }
       if (this.colorFilter !== "all" && comment.mark.color !== this.colorFilter) {
         return false;
       }
@@ -499,51 +479,11 @@ export class SideCommentsSidebarView extends ItemView {
     return sortComments(matches);
   }
 
-  private hasOnlyHiddenResolvedMatches(comments: SideComment[]): boolean {
-    if (this.plugin.settings.showResolvedComments) {
-      return false;
-    }
-
-    const matchesBeforeResolvedVisibility = comments.filter((comment) => {
-      if (this.colorFilter !== "all" && comment.mark.color !== this.colorFilter) {
-        return false;
-      }
-      if (this.statusFilter !== "all" && comment.status !== this.statusFilter) {
-        return false;
-      }
-      if (this.annotationTypeFilters.size > 0 && !this.annotationTypeFilters.has(getAnnotationType(comment))) {
-        return false;
-      }
-      if (!hasAnyNormalizedTag(comment, this.tagFilters)) {
-        return false;
-      }
-
-      const query = this.searchQuery.trim().toLowerCase();
-      if (!query) {
-        return true;
-      }
-      return (
-        comment.anchor.selectedText.toLowerCase().includes(query) ||
-        comment.note.content.toLowerCase().includes(query) ||
-        getAnnotationType(comment).toLowerCase().includes(query) ||
-        normalizeTags(comment.tags).some((tag) => tag.toLowerCase().includes(query))
-      );
-    });
-
-    return matchesBeforeResolvedVisibility.length > 0 && matchesBeforeResolvedVisibility.every((comment) => comment.status === "resolved");
-  }
-
   private isCommentExpanded(comment: SideComment): boolean {
     if (this.editingCommentId === comment.id) {
       return true;
     }
-    if (comment.status === "resolved") {
-      return this.expandedResolvedCommentIds.has(comment.id);
-    }
-    if (this.plugin.settings.sidebarDisplayMode === "compact") {
-      return this.expandedCompactCommentIds.has(comment.id);
-    }
-    return !this.collapsedCommentIds.has(comment.id);
+    return this.expandedCommentIds.has(comment.id);
   }
 
   private buildSubtitle(total: number, visible: number): string {
@@ -620,30 +560,6 @@ export class SideCommentsSidebarView extends ItemView {
       card?.scrollIntoView({ block: "center", behavior: "smooth" });
     });
   }
-}
-
-function createToolbarButton(
-  container: HTMLElement,
-  label: string,
-  tooltip: string,
-  onClick: () => void,
-  active = false
-): HTMLButtonElement {
-  const button = container.createEl("button", {
-    cls: ["side-comments-toolbar-button", active ? "is-active" : ""].filter(Boolean).join(" "),
-    attr: {
-      type: "button",
-      title: tooltip,
-      "aria-label": tooltip
-    }
-  });
-  button.createSpan({ cls: "side-comments-toolbar-button-label", text: label });
-  button.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    onClick();
-  });
-  return button;
 }
 
 function draftFromComment(comment: SideComment): CommentDraft {

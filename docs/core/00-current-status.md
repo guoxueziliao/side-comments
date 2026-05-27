@@ -4,13 +4,15 @@ Status: Confirmed
 
 ## Version
 
-- Current development version: `0.3.0`
-- Current published release: `0.2.0`
+- Last published release: `0.4.0`
+- Current `manifest.json` version: `0.7.0`
+- Current development release: `0.7.0` (Data Maintenance Build-out; implementation complete, pending review and test)
+- Next planned release: TBD
 - Repository: `guoxueziliao/side-comments`
 - Local development path: `/home/fan/obsidian插件`
 - Local test install path: `C:\Users\FAN\Desktop\全域智库\.obsidian\plugins\side-comments`
 
-## Implemented MVP
+## Implemented And Merged
 
 - Create annotations from selected Markdown text.
 - Support source mode and reading mode.
@@ -22,12 +24,25 @@ Status: Confirmed
 - Load current-document sidecar data lazily.
 - Relocate anchors conservatively after document edits.
 - Support lazy sidecar schema migration.
+- Read-only cross-note annotation overview page (Stage 4).
+- Bilingual UI infrastructure (Stage 4).
+- Stage 5 export entry points (current note, selected note, all sidecars; export side only).
+- Annotation type and user-defined tags data model, combined filters, and Markdown draft copy (Stage 6).
+
+## Planned But Not Yet Implemented
+
+- None for the current release.
+
+## In Progress
+
+- `0.7.0` review and test pass.
 
 ## Release State
 
 - GitHub repository is connected.
 - Release assets are published through GitHub Releases.
-- Official plugin submission has been started.
+- Latest published release is `0.4.0`.
+- Code on `main` is ahead of the latest published release and currently targets `0.7.0`.
 - Local development copy should be kept for testing and iteration.
 
 ## Known Limits

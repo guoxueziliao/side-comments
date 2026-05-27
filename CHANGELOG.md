@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.0 - Data Maintenance Build-out
+
+- Added JSON export format v2 with annotation type and tag fields.
+- Updated Markdown exports to show Mark, Annotation type, Color, and Tags.
+- Added JSON import preview with restore-to-original-path and import-into-current-document modes.
+- Added backup batches under `.obsidian-side-comments/.backups/` for import and repair writes.
+- Added a health check view with severity filters, issue categories, and source navigation.
+- Added orphaned rebind confirmation, duplicate annotation repair actions, and confirmed cleanup for deleted-source annotation data.
+
 ## 0.4.0
 
 - Added bilingual UI infrastructure.

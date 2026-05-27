@@ -14,7 +14,8 @@ export function createRecentPreview(document: SideCommentDocument, maxItems = 5)
       color: comment.mark.color,
       status: comment.status,
       annotationType: getAnnotationType(comment),
-      tags: normalizeTags(comment.tags)
+      tags: normalizeTags(comment.tags),
+      updatedAt: comment.note.updatedAt
     }))
   };
 }

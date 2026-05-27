@@ -148,3 +148,53 @@ Discussion-only:
 Deliverable document:
 
 - `../stage-6/37-stage-6-advanced-review-workflow.md`
+
+## Stage 6.5: UX Refresh
+
+Status: Confirmed
+
+Goal: clean up overlapping concepts and wire up the Stage 6 surfaces that the data layer plumbed but did not surface, in a single mid-cycle `0.6.5` release between `0.6.0` and `0.7.0`.
+
+Confirmed work:
+
+- Semantics consolidation: `note` becomes an independent mark type; mark type and color decouple; "resolved" controls compress from three to two.
+- Selection toolbar redesign with split-button-plus-chevron and icon-only buttons.
+- Comment card redesign with a two-row edit panel, color bar plus status indicator, and a single overflow menu.
+- Cross-note overview using a shared card, source-based grouping, chip-style filter row, and primary `Copy Markdown draft` button.
+- Settings page split into four labeled groups including a language switcher.
+
+Deliverable document:
+
+- `../stage-6.5/51-stage-6-5-overview.md`
+
+## Stage 7: Data Maintenance Build-out
+
+Status: Confirmed
+
+Goal: finish the data maintenance surfaces that Stage 5 designed but did not implement, aligned with the data model and visual layer introduced by Stage 6 and Stage 6.5, in a single `0.7.0` release.
+
+Confirmed work:
+
+- JSON export schema bumps to `v2` to include `annotationType` and `tags`; Markdown export splits "type" into four labeled fields (mark, annotation type, color, tags); importer applies silent defaults for `v1` packages.
+- Import preview modal with per-document grouping, count summary, and `.backups/<timestamp>-import/` automatic backup.
+- Read-only health check report in a dedicated view tab with chip-row severity filtering and click-to-source navigation.
+- Manual orphaned annotation rebind from both the sidebar card and the health report; duplicate annotation handling expanded inline inside the report.
+- Stage 5 orphan i18n keys promoted to bound keys.
+
+Deliverable document:
+
+- `../stage-7/59-stage-7-overview.md`
+
+## Stage 8: Simplification And Annotation Model Redesign
+
+Status: To discuss
+
+Goal: simplify the product after `0.7.0` by separating visual marks from written notes and removing the fixed annotation type layer from the user-facing UI.
+
+- Remove the fixed `摘录 / 问题 / 想法 / 任务` annotation type controls from user-facing surfaces.
+- Redesign the model as `Anchor + Optional Mark + Optional Note`.
+- Keep mark type, color, tags, and status; continue reading old `annotationType` fields without batch migration or interrupting `0.7.0`.
+
+Deliverable document:
+
+- `../stage-8/69-stage-8-simplification.md`

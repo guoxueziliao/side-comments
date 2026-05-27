@@ -5,9 +5,10 @@ import type {
   SideCommentExportStats,
   SideCommentsExportPackage
 } from "../types";
+import { getAnnotationType, normalizeTags } from "../organization/annotationMetadata";
 
 const EXPORT_FORMAT = "side-comments-export";
-const EXPORT_FORMAT_VERSION = 1;
+export const EXPORT_FORMAT_VERSION = 2;
 
 export function createExportPackage(params: {
   pluginVersion: string;
@@ -19,7 +20,7 @@ export function createExportPackage(params: {
   const exportedAt = params.exportedAt ?? new Date().toISOString();
   return {
     format: EXPORT_FORMAT,
-    formatVersion: EXPORT_FORMAT_VERSION,
+    exportFormatVersion: EXPORT_FORMAT_VERSION,
     pluginVersion: params.pluginVersion,
     exportedAt,
     scope: params.scope,
@@ -41,7 +42,7 @@ export function buildExportDocumentEntry(params: {
     filePath: normalizePath(params.filePath),
     sidecarPath: normalizePath(params.sidecarPath),
     schemaVersion: params.schemaVersion,
-    comments: params.comments,
+    comments: params.comments.map(normalizeExportComment),
     stats: summarizeComments(params.comments)
   };
 }
@@ -55,7 +56,7 @@ export function exportPackageToMarkdown(exportPackage: SideCommentsExportPackage
   lines.push("# Side Comments export");
   lines.push("");
   lines.push(`- Format: ${exportPackage.format}`);
-  lines.push(`- Format version: ${exportPackage.formatVersion}`);
+  lines.push(`- Format version: ${exportPackage.exportFormatVersion}`);
   lines.push(`- Plugin version: ${exportPackage.pluginVersion}`);
   lines.push(`- Exported at: ${exportPackage.exportedAt}`);
   lines.push(`- Scope: ${exportPackage.scope}`);
@@ -77,8 +78,13 @@ export function exportPackageToMarkdown(exportPackage: SideCommentsExportPackage
       lines.push(`### ${index + 1}. ${describeComment(comment)}`);
       lines.push("");
       lines.push(`- Status: ${comment.status}`);
-      lines.push(`- Type: ${comment.mark.type}`);
+      lines.push(`- Mark: ${comment.mark.type}`);
+      lines.push(`- Annotation type: ${getAnnotationType(comment)}`);
       lines.push(`- Color: ${comment.mark.color}`);
+      const tags = normalizeTags(comment.tags);
+      if (tags.length > 0) {
+        lines.push(`- Tags: ${tags.join(", ")}`);
+      }
       lines.push(`- Selected text: ${inlineOrFallback(comment.anchor.selectedText)}`);
       lines.push(`- Comment: ${inlineOrFallback(comment.note.content)}`);
       if (comment.anchor.context) {
@@ -97,6 +103,14 @@ export function exportPackageToMarkdown(exportPackage: SideCommentsExportPackage
   }
 
   return lines.join("\n").trimEnd() + "\n";
+}
+
+function normalizeExportComment(comment: SideComment): SideComment {
+  return {
+    ...comment,
+    annotationType: getAnnotationType(comment),
+    tags: normalizeTags(comment.tags)
+  };
 }
 
 export function summarizeComments(comments: SideComment[]): SideCommentExportStats {

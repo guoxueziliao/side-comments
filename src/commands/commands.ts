@@ -1,6 +1,13 @@
 import { Notice, type Editor, type MarkdownFileInfo } from "obsidian";
 import type SideCommentsPlugin from "../../main";
 import { TOOLBAR_ACTIONS, type SelectionToolbarAction } from "../editor/selectionToolbar";
+import type { AnnotationType } from "../types";
+
+const TYPED_CREATE_COMMANDS: { id: string; annotationType: AnnotationType; nameKey: "command.addAsQuestion" | "command.addAsThought" | "command.addAsTask" }[] = [
+  { id: "add-as-question", annotationType: "question", nameKey: "command.addAsQuestion" },
+  { id: "add-as-thought",  annotationType: "thought",  nameKey: "command.addAsThought" },
+  { id: "add-as-task",     annotationType: "task",     nameKey: "command.addAsTask" }
+];
 
 export function registerSideCommentCommands(plugin: SideCommentsPlugin): void {
   plugin.addCommand({
@@ -16,6 +23,21 @@ export function registerSideCommentCommands(plugin: SideCommentsPlugin): void {
       id: `add-${action.id}`,
       name: plugin.t("command.addSelection", { label: plugin.t(action.titleKey).toLowerCase() }),
       editorCallback: (editor: Editor, ctx: MarkdownFileInfo) => {
+        void createFromEditor(plugin, editor, ctx, action);
+      }
+    });
+  }
+
+  const highlightDefault = TOOLBAR_ACTIONS.find((entry) => entry.id === "highlight") ?? TOOLBAR_ACTIONS[0];
+  for (const command of TYPED_CREATE_COMMANDS) {
+    plugin.addCommand({
+      id: command.id,
+      name: plugin.t(command.nameKey),
+      editorCallback: (editor: Editor, ctx: MarkdownFileInfo) => {
+        const action: SelectionToolbarAction = {
+          ...highlightDefault,
+          annotationType: command.annotationType
+        };
         void createFromEditor(plugin, editor, ctx, action);
       }
     });
@@ -49,6 +71,14 @@ export function registerSideCommentCommands(plugin: SideCommentsPlugin): void {
     name: plugin.t("crossNote.open"),
     callback: () => {
       void plugin.activateCrossNoteReview();
+    }
+  });
+
+  plugin.addCommand({
+    id: "run-health-check-current-note",
+    name: plugin.t("health.runCurrentNote"),
+    callback: () => {
+      void plugin.runAndOpenHealthCheck("current-note");
     }
   });
 }

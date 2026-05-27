@@ -1,17 +1,28 @@
-import { ItemView, WorkspaceLeaf } from "obsidian";
+import { ItemView, Menu, Notice, setIcon, WorkspaceLeaf } from "obsidian";
 import type SideCommentsPlugin from "../../main";
-import type { AnnotationType, MarkColor, MarkType, RecentPreviewItem, SideComment, SideCommentStatus } from "../types";
-import { colorLabel, markLabel, statusLabel } from "./commentCard";
+import type {
+  AnnotationType,
+  CommentDraft,
+  MarkColor,
+  MarkType,
+  RecentPreviewItem,
+  SideComment,
+  SideCommentStatus
+} from "../types";
+import { renderCommentCard } from "./commentCard";
 import {
   ANNOTATION_TYPES,
   annotationTypeLabel,
+  getAnnotationType,
   normalizeTagKey,
   normalizeTags
 } from "../organization/annotationMetadata";
+import { createFilterChip, createToolbarButton, openMultiSelectPopup } from "./shared";
 
 export const SIDE_COMMENTS_CROSS_NOTE_VIEW_TYPE = "side-comments-cross-note-view";
 
 type CrossNoteLoadState = "loading" | "ready" | "missing" | "failed";
+type GroupBy = "file" | "time";
 
 interface CrossNoteResult {
   filePath: string;
@@ -24,18 +35,22 @@ interface CrossNoteResult {
   status: SideCommentStatus;
   annotationType: AnnotationType;
   tags: string[];
-  updatedAt: string;
+  commentUpdatedAt: string;
+  fileUpdatedAt: string;
 }
 
 export class SideCommentsCrossNoteView extends ItemView {
   private loadState: CrossNoteLoadState = "loading";
   private results: CrossNoteResult[] = [];
   private searchQuery = "";
-  private sourceFilter = "";
   private statusFilter: SideCommentStatus | "all" = "all";
   private colorFilter: MarkColor | "all" = "all";
-  private readonly annotationTypeFilters = new Set<AnnotationType>();
+  private typeFilter: AnnotationType | "all" = "all";
   private readonly tagFilters = new Set<string>();
+  private readonly sourceFilters = new Set<string>();
+  private groupBy: GroupBy = "file";
+  private readonly collapsedGroups = new Set<string>();
+  private readonly expandedCards = new Set<string>();
 
   constructor(leaf: WorkspaceLeaf, private readonly plugin: SideCommentsPlugin) {
     super(leaf);
@@ -67,126 +82,16 @@ export class SideCommentsCrossNoteView extends ItemView {
     void this.render();
   }
 
-  setSearchQuery(value: string): void {
-    this.searchQuery = value;
-    void this.render();
-  }
-
-  setSourceFilter(value: string): void {
-    this.sourceFilter = value;
-    void this.render();
-  }
-
-  setStatusFilter(value: CrossNoteResult["status"] | "all"): void {
-    this.statusFilter = value;
-    void this.render();
-  }
-
-  setColorFilter(value: CrossNoteResult["color"] | "all"): void {
-    this.colorFilter = value;
-    void this.render();
-  }
-
-  clearFilters(): void {
-    this.searchQuery = "";
-    this.sourceFilter = "";
-    this.statusFilter = "all";
-    this.colorFilter = "all";
-    this.annotationTypeFilters.clear();
-    this.tagFilters.clear();
-    void this.render();
-  }
-
-  async openSource(result: CrossNoteResult): Promise<void> {
-    await this.plugin.openSourceDocument(result.filePath);
-  }
-
-  async jumpToResult(result: CrossNoteResult): Promise<void> {
-    await this.plugin.openSourceComment(result.filePath, result.commentId);
-  }
-
   async render(): Promise<void> {
     const content = this.getContentEl();
     content.empty();
     content.addClass("side-comments-cross-note");
 
     const header = content.createDiv({ cls: "side-comments-cross-note-header" });
-    header.createDiv({ cls: "side-comments-title", text: this.plugin.t("crossNote.title") });
-    header.createDiv({ cls: "side-comments-subtitle", text: this.plugin.t("crossNote.subtitle") });
-
-    const searchRow = header.createDiv({ cls: "side-comments-toolbar-row side-comments-toolbar-row--cross-note" });
-    const searchInput = searchRow.createEl("input", {
-      attr: {
-        type: "search",
-        placeholder: this.plugin.t("filter.search.placeholder")
-      }
-    });
-    searchInput.value = this.searchQuery;
-    searchInput.addEventListener("input", () => this.setSearchQuery(searchInput.value));
-
-    const sourceInput = searchRow.createEl("input", {
-      attr: {
-        type: "search",
-        placeholder: this.plugin.t("filter.source.placeholder")
-      }
-    });
-    sourceInput.value = this.sourceFilter;
-    sourceInput.addEventListener("input", () => this.setSourceFilter(sourceInput.value));
-
-    const colorSelect = searchRow.createEl("select");
-    for (const [value, label] of [
-      ["all", this.plugin.t("filter.color.all")],
-      ["yellow", this.plugin.t("filter.color.yellow")],
-      ["blue", this.plugin.t("filter.color.blue")],
-      ["red", this.plugin.t("filter.color.red")],
-      ["green", this.plugin.t("filter.color.green")],
-      ["purple", this.plugin.t("filter.color.purple")]
-    ] as const) {
-      const option = colorSelect.createEl("option", { text: label });
-      option.value = value;
-    }
-    colorSelect.value = this.colorFilter;
-    colorSelect.addEventListener("change", () => this.setColorFilter(colorSelect.value as CrossNoteResult["color"] | "all"));
-
-    const statusSelect = searchRow.createEl("select");
-    for (const [value, label] of [
-      ["all", this.plugin.t("filter.status.all")],
-      ["active", this.plugin.t("filter.status.active")],
-      ["resolved", this.plugin.t("filter.status.resolved")],
-      ["orphaned", this.plugin.t("filter.status.orphaned")]
-    ] as const) {
-      const option = statusSelect.createEl("option", { text: label });
-      option.value = value;
-    }
-    statusSelect.value = this.statusFilter;
-    statusSelect.addEventListener("change", () => this.setStatusFilter(statusSelect.value as CrossNoteResult["status"] | "all"));
-
-    if (this.hasActiveFilters()) {
-      createToolbarButton(searchRow, this.plugin.t("filter.clear.short"), this.plugin.t("filter.clear"), () => this.clearFilters());
-    }
-
-    createToolbarButton(searchRow, this.plugin.t("draft.copy"), this.plugin.t("draft.copyTooltip"), () => {
-      void this.copyDraft(this.getFilteredResults());
-    });
-
-    const typeFilterRow = header.createDiv({ cls: "side-comments-filter-chip-row" });
-    typeFilterRow.createSpan({ cls: "side-comments-filter-chip-label", text: this.plugin.t("annotationType.placeholder") });
-    for (const type of ANNOTATION_TYPES) {
-      createToolbarButton(typeFilterRow, annotationTypeLabel(type, this.plugin.t), annotationTypeLabel(type, this.plugin.t), () => {
-        this.toggleAnnotationTypeFilter(type);
-      }, this.annotationTypeFilters.has(type));
-    }
-
-    const availableTags = this.getAvailableTags();
-    if (availableTags.length > 0) {
-      const tagFilterRow = header.createDiv({ cls: "side-comments-filter-chip-row" });
-      tagFilterRow.createSpan({ cls: "side-comments-filter-chip-label", text: this.plugin.t("tags.label") });
-      for (const tag of availableTags) {
-        createToolbarButton(tagFilterRow, tag, tag, () => {
-          this.toggleTagFilter(tag);
-        }, this.tagFilters.has(normalizeTagKey(tag)));
-      }
-    }
+    this.renderTitleRow(header);
+    this.renderSearchRow(header);
+    this.renderFilterChips(header);
+    this.renderGroupToggle(header);
 
     const filtered = this.getFilteredResults();
     header.createDiv({
@@ -195,150 +100,446 @@ export class SideCommentsCrossNoteView extends ItemView {
     });
 
     if (this.loadState === "loading") {
-      content.createDiv({ cls: "side-comments-empty", text: this.plugin.t("empty.crossNote.recentUnavailable") });
+      content.createDiv({ cls: "side-comments-empty", text: this.plugin.t("empty.crossNote.loading") });
       return;
     }
-
-    if (this.loadState === "missing") {
-      content.createDiv({ cls: "side-comments-empty", text: this.plugin.t("empty.crossNote.recentUnavailable") });
-      return;
-    }
-
     if (this.loadState === "failed") {
-      content.createDiv({ cls: "side-comments-empty", text: this.plugin.t("empty.crossNote.readFailed") });
+      content.createDiv({ cls: "side-comments-empty", text: this.plugin.t("empty.crossNote.failed") });
       return;
     }
-
-    if (this.results.length === 0) {
-      content.createDiv({ cls: "side-comments-empty", text: this.plugin.t("empty.crossNote.noRecent") });
+    if (this.loadState === "missing" || this.results.length === 0) {
+      content.createDiv({ cls: "side-comments-empty", text: this.plugin.t("empty.crossNote.missing") });
       return;
     }
-
     if (filtered.length === 0) {
       content.createDiv({ cls: "side-comments-empty", text: this.plugin.t("empty.crossNote.noMatches") });
       return;
     }
 
-    for (const result of filtered) {
-      const card = content.createDiv({
-        cls: [
-          "side-comments-card",
-          "side-comments-cross-note-card",
-          `side-comments-card--${result.status}`
-        ].join(" ")
+    if (this.groupBy === "file") {
+      this.renderGroupedByFile(content, filtered);
+    } else {
+      this.renderFlat(content, filtered);
+    }
+  }
+
+  private renderTitleRow(header: HTMLElement): void {
+    const titleRow = header.createDiv({ cls: "side-comments-cross-note-title-row" });
+    titleRow.createDiv({ cls: "side-comments-title", text: this.plugin.t("crossNote.title") });
+
+    const actions = titleRow.createDiv({ cls: "side-comments-header-actions" });
+    const copyBtn = actions.createEl("button", {
+      cls: "side-comments-cross-note-copy-btn mod-cta",
+      attr: { type: "button", title: this.plugin.t("draft.copyTooltip") }
+    });
+    setIcon(copyBtn.createSpan({ cls: "side-comments-cross-note-copy-btn-icon" }), "copy");
+    copyBtn.createSpan({ text: this.plugin.t("crossNote.copyDraft") });
+    copyBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void this.copyDraft(this.getFilteredResults());
+    });
+  }
+
+  private renderSearchRow(header: HTMLElement): void {
+    const row = header.createDiv({ cls: "side-comments-toolbar-row" });
+    const searchInput = row.createEl("input", {
+      cls: "side-comments-cross-note-search",
+      attr: {
+        type: "search",
+        placeholder: this.plugin.t("filter.search.placeholder")
+      }
+    });
+    searchInput.value = this.searchQuery;
+    searchInput.addEventListener("input", () => {
+      this.searchQuery = searchInput.value;
+      void this.render();
+    });
+  }
+
+  private renderFilterChips(header: HTMLElement): void {
+    const row = header.createDiv({ cls: "side-comments-cross-note-chip-row" });
+
+    createFilterChip(row, {
+      label: this.plugin.t("filter.status.label"),
+      valueLabel: this.statusFilter === "all" ? this.plugin.t("filter.status.all") : statusLabelLocal(this.statusFilter, this.plugin),
+      active: this.statusFilter !== "all",
+      onClick: (event) => this.openStatusMenu(event)
+    });
+
+    createFilterChip(row, {
+      label: this.plugin.t("filter.color.label"),
+      valueLabel: this.colorFilter === "all" ? this.plugin.t("filter.color.all") : colorLabelLocal(this.colorFilter, this.plugin),
+      active: this.colorFilter !== "all",
+      onClick: (event) => this.openColorMenu(event)
+    });
+
+    createFilterChip(row, {
+      label: this.plugin.t("filter.type.label"),
+      valueLabel: this.typeFilter === "all" ? this.plugin.t("filter.type.all") : annotationTypeLabel(this.typeFilter, this.plugin.t),
+      active: this.typeFilter !== "all",
+      onClick: (event) => this.openTypeMenu(event)
+    });
+
+    const tagSummary = this.tagFilters.size === 0
+      ? this.plugin.t("filter.tags.all")
+      : `${this.tagFilters.size}`;
+    const tagChip = createFilterChip(row, {
+      label: this.plugin.t("filter.tag.label"),
+      valueLabel: tagSummary,
+      active: this.tagFilters.size > 0,
+      onClick: () => this.openTagPopup(tagChip)
+    });
+
+    const sourceSummary = this.sourceFilters.size === 0
+      ? this.plugin.t("filter.source.all")
+      : `${this.sourceFilters.size}`;
+    const sourceChip = createFilterChip(row, {
+      label: this.plugin.t("filter.source.label"),
+      valueLabel: sourceSummary,
+      active: this.sourceFilters.size > 0,
+      onClick: () => this.openSourcePopup(sourceChip)
+    });
+
+    if (this.hasActiveFilters()) {
+      createToolbarButton(row, this.plugin.t("filter.clear.short"), this.plugin.t("filter.clear"), () => this.clearFilters());
+    }
+  }
+
+  private renderGroupToggle(header: HTMLElement): void {
+    const row = header.createDiv({ cls: "side-comments-cross-note-group-toggle" });
+    createToolbarButton(
+      row,
+      this.plugin.t("crossNote.groupBy.file"),
+      this.plugin.t("crossNote.groupBy.file"),
+      () => {
+        this.groupBy = "file";
+        void this.render();
+      },
+      this.groupBy === "file"
+    );
+    createToolbarButton(
+      row,
+      this.plugin.t("crossNote.groupBy.time"),
+      this.plugin.t("crossNote.groupBy.time"),
+      () => {
+        this.groupBy = "time";
+        void this.render();
+      },
+      this.groupBy === "time"
+    );
+  }
+
+  private renderGroupedByFile(content: HTMLElement, results: CrossNoteResult[]): void {
+    const groups = new Map<string, CrossNoteResult[]>();
+    for (const result of results) {
+      if (!groups.has(result.filePath)) {
+        groups.set(result.filePath, []);
+      }
+      groups.get(result.filePath)!.push(result);
+    }
+
+    for (const [filePath, groupResults] of groups) {
+      const fileName = groupResults[0].fileName;
+      const groupEl = content.createDiv({ cls: "side-comments-cross-note-group" });
+      const groupHeader = groupEl.createDiv({ cls: "side-comments-cross-note-group-header" });
+      groupHeader.addEventListener("click", (event) => {
+        if (event.target instanceof HTMLElement && event.target.closest(".side-comments-cross-note-group-open")) {
+          return;
+        }
+        this.toggleGroupCollapsed(filePath);
       });
 
-      const headerRow = card.createDiv({ cls: "side-comments-card-header" });
-      const meta = headerRow.createDiv({ cls: "side-comments-card-meta" });
-      meta.createSpan({ cls: `side-comments-color-dot side-comments-color-dot--${result.color}` });
-      meta.createSpan({ text: `${result.fileName} · ${annotationTypeLabel(result.annotationType, this.plugin.t)} · ${statusLabel(result.status, this.plugin.t)}` });
+      const caret = groupHeader.createSpan({ cls: "side-comments-cross-note-group-caret" });
+      setIcon(caret, this.collapsedGroups.has(filePath) ? "chevron-right" : "chevron-down");
 
-      const actions = headerRow.createDiv({ cls: "side-comments-card-header-actions" });
-      createToolbarButton(actions, this.plugin.t("action.openSource"), this.plugin.t("action.openSource"), () => {
-        void this.openSource(result);
-      });
-      createToolbarButton(actions, this.plugin.t("action.jump.short"), this.plugin.t("action.jumpToText"), () => {
-        void this.jumpToResult(result);
+      const title = groupHeader.createSpan({ cls: "side-comments-cross-note-group-title" });
+      title.setText(fileName);
+      title.setAttr("title", filePath);
+
+      groupHeader.createSpan({
+        cls: "side-comments-cross-note-group-count",
+        text: this.plugin.t("crossNote.group.count", { count: groupResults.length })
       });
 
-      card.createDiv({ cls: "side-comments-card-section-title", text: this.plugin.t("card.source") });
-      card.createDiv({ cls: "side-comments-card-excerpt", text: result.selectedTextPreview || this.plugin.t("card.emptySelection") });
-      card.createDiv({ cls: "side-comments-card-section-title", text: this.plugin.t("card.comment") });
-      card.createDiv({ cls: "side-comments-card-note", text: result.notePreview || this.plugin.t("card.emptyNote") });
-      card.createDiv({
-        cls: "side-comments-card-context",
-        text: `${markLabel(result.markType, this.plugin.t)} · ${colorLabel(result.color, this.plugin.t)}`
+      this.renderStatusDistribution(groupHeader, groupResults);
+
+      const openBtn = groupHeader.createEl("button", {
+        cls: "side-comments-cross-note-group-open",
+        attr: { type: "button", title: this.plugin.t("crossNote.group.open") }
       });
-      const tags = normalizeTags(result.tags);
-      if (tags.length > 0) {
-        card.createDiv({ cls: "side-comments-card-context", text: `${this.plugin.t("tags.label")}: ${tags.join(", ")}` });
+      openBtn.setText(this.plugin.t("crossNote.group.open"));
+      openBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void this.plugin.openSourceDocument(filePath);
+      });
+
+      if (this.collapsedGroups.has(filePath)) {
+        continue;
+      }
+
+      const body = groupEl.createDiv({ cls: "side-comments-cross-note-group-body" });
+      for (const result of groupResults) {
+        this.renderResultCard(body, result);
       }
     }
   }
 
-  private getContentEl(): HTMLElement {
-    return this.containerEl.children[1] as HTMLElement;
+  private renderFlat(content: HTMLElement, results: CrossNoteResult[]): void {
+    const sorted = [...results].sort((a, b) => (b.commentUpdatedAt || b.fileUpdatedAt).localeCompare(a.commentUpdatedAt || a.fileUpdatedAt));
+    for (const result of sorted) {
+      this.renderResultCard(content, result);
+    }
+  }
+
+  private renderResultCard(container: HTMLElement, result: CrossNoteResult): void {
+    const comment = previewAsSideComment(result);
+    const draft = draftFromComment(comment);
+    renderCommentCard(container, comment, {
+      t: this.plugin.t,
+      expanded: this.expandedCards.has(result.commentId),
+      editing: false,
+      flash: false,
+      draft,
+      tagSuggestions: [],
+      filenamePrefix: { name: result.fileName, fullPath: result.filePath },
+      onJump: (commentId) => {
+        void this.plugin.openSourceComment(result.filePath, commentId);
+      },
+      onToggleExpand: (commentId) => {
+        if (this.expandedCards.has(commentId)) {
+          this.expandedCards.delete(commentId);
+        } else {
+          this.expandedCards.add(commentId);
+        }
+        void this.render();
+      },
+      extraMenuItems: (menu) => {
+        menu.addItem((item) => {
+          item.setTitle(this.plugin.t("crossNote.openSourceMenuItem"))
+            .setIcon("file-text")
+            .onClick(() => {
+              void this.plugin.openSourceDocument(result.filePath);
+            });
+        });
+        menu.addItem((item) => {
+          item.setTitle(this.plugin.t("crossNote.revealCardMenuItem"))
+            .setIcon("crosshair")
+            .onClick(() => {
+              void this.plugin.openSourceComment(result.filePath, result.commentId);
+            });
+        });
+      }
+    });
+  }
+
+  private renderStatusDistribution(container: HTMLElement, results: CrossNoteResult[]): void {
+    const counts = { active: 0, resolved: 0, orphaned: 0 };
+    for (const r of results) {
+      counts[r.status] += 1;
+    }
+    const wrapper = container.createSpan({ cls: "side-comments-cross-note-group-status" });
+    for (const [status, count] of [
+      ["active", counts.active],
+      ["resolved", counts.resolved],
+      ["orphaned", counts.orphaned]
+    ] as const) {
+      if (count === 0) continue;
+      const span = wrapper.createSpan({ cls: `side-comments-cross-note-status-pill side-comments-cross-note-status-pill--${status}` });
+      span.createSpan({ cls: "side-comments-cross-note-status-dot" });
+      span.createSpan({ text: String(count) });
+    }
+  }
+
+  private openStatusMenu(event: MouseEvent): void {
+    const menu = new Menu();
+    const options: { value: SideCommentStatus | "all"; label: string }[] = [
+      { value: "all", label: this.plugin.t("filter.status.all") },
+      { value: "active", label: this.plugin.t("filter.status.active") },
+      { value: "resolved", label: this.plugin.t("filter.status.resolved") },
+      { value: "orphaned", label: this.plugin.t("filter.status.orphaned") }
+    ];
+    for (const opt of options) {
+      menu.addItem((item) => {
+        item.setTitle(opt.label)
+          .setChecked(this.statusFilter === opt.value)
+          .onClick(() => {
+            this.statusFilter = opt.value;
+            void this.render();
+          });
+      });
+    }
+    menu.showAtMouseEvent(event);
+  }
+
+  private openColorMenu(event: MouseEvent): void {
+    const menu = new Menu();
+    const options: { value: MarkColor | "all"; label: string }[] = [
+      { value: "all", label: this.plugin.t("filter.color.all") },
+      { value: "yellow", label: this.plugin.t("filter.color.yellow") },
+      { value: "blue", label: this.plugin.t("filter.color.blue") },
+      { value: "red", label: this.plugin.t("filter.color.red") },
+      { value: "green", label: this.plugin.t("filter.color.green") },
+      { value: "purple", label: this.plugin.t("filter.color.purple") }
+    ];
+    for (const opt of options) {
+      menu.addItem((item) => {
+        item.setTitle(opt.label)
+          .setChecked(this.colorFilter === opt.value)
+          .onClick(() => {
+            this.colorFilter = opt.value;
+            void this.render();
+          });
+      });
+    }
+    menu.showAtMouseEvent(event);
+  }
+
+  private openTypeMenu(event: MouseEvent): void {
+    const menu = new Menu();
+    menu.addItem((item) => {
+      item.setTitle(this.plugin.t("filter.type.all"))
+        .setChecked(this.typeFilter === "all")
+        .onClick(() => {
+          this.typeFilter = "all";
+          void this.render();
+        });
+    });
+    for (const type of ANNOTATION_TYPES) {
+      menu.addItem((item) => {
+        item.setTitle(annotationTypeLabel(type, this.plugin.t))
+          .setChecked(this.typeFilter === type)
+          .onClick(() => {
+            this.typeFilter = type;
+            void this.render();
+          });
+      });
+    }
+    menu.showAtMouseEvent(event);
+  }
+
+  private openTagPopup(anchor: HTMLElement): void {
+    const tags = this.getAvailableTags();
+    if (tags.length === 0) {
+      const menu = new Menu();
+      menu.addItem((item) => item.setTitle(this.plugin.t("tags.autocompleteEmpty")).setDisabled(true));
+      const rect = anchor.getBoundingClientRect();
+      menu.showAtPosition({ x: rect.left, y: rect.bottom + 4 });
+      return;
+    }
+    openMultiSelectPopup({
+      anchor,
+      items: tags.map((tag) => ({ key: normalizeTagKey(tag), label: tag })),
+      selected: this.tagFilters,
+      searchPlaceholder: this.plugin.t("filter.tag.search"),
+      onChange: (next) => {
+        this.tagFilters.clear();
+        for (const key of next) {
+          this.tagFilters.add(key);
+        }
+        void this.render();
+      }
+    });
+  }
+
+  private openSourcePopup(anchor: HTMLElement): void {
+    const files = Array.from(new Set(this.results.map((r) => r.filePath)))
+      .sort()
+      .map((filePath) => ({
+        key: filePath,
+        label: filePath.split("/").pop() ?? filePath
+      }));
+    openMultiSelectPopup({
+      anchor,
+      items: files,
+      selected: this.sourceFilters,
+      searchPlaceholder: this.plugin.t("filter.source.search"),
+      onChange: (next) => {
+        this.sourceFilters.clear();
+        for (const key of next) {
+          this.sourceFilters.add(key);
+        }
+        void this.render();
+      }
+    });
+  }
+
+  private toggleGroupCollapsed(filePath: string): void {
+    if (this.collapsedGroups.has(filePath)) {
+      this.collapsedGroups.delete(filePath);
+    } else {
+      this.collapsedGroups.add(filePath);
+    }
+    void this.render();
+  }
+
+  private clearFilters(): void {
+    this.searchQuery = "";
+    this.statusFilter = "all";
+    this.colorFilter = "all";
+    this.typeFilter = "all";
+    this.tagFilters.clear();
+    this.sourceFilters.clear();
+    void this.render();
   }
 
   private hasActiveFilters(): boolean {
-    return Boolean(this.searchQuery.trim() || this.sourceFilter.trim() || this.statusFilter !== "all" || this.colorFilter !== "all" || this.annotationTypeFilters.size > 0 || this.tagFilters.size > 0);
+    return Boolean(
+      this.searchQuery.trim() ||
+      this.statusFilter !== "all" ||
+      this.colorFilter !== "all" ||
+      this.typeFilter !== "all" ||
+      this.tagFilters.size > 0 ||
+      this.sourceFilters.size > 0
+    );
   }
 
   private getFilteredResults(): CrossNoteResult[] {
     const query = this.searchQuery.trim().toLowerCase();
-    const sourceQuery = this.sourceFilter.trim().toLowerCase();
     return this.results.filter((result) => {
-      if (this.statusFilter !== "all" && result.status !== this.statusFilter) {
-        return false;
-      }
-      if (this.colorFilter !== "all" && result.color !== this.colorFilter) {
-        return false;
-      }
-      if (this.annotationTypeFilters.size > 0 && !this.annotationTypeFilters.has(result.annotationType)) {
-        return false;
-      }
+      if (this.statusFilter !== "all" && result.status !== this.statusFilter) return false;
+      if (this.colorFilter !== "all" && result.color !== this.colorFilter) return false;
+      if (this.typeFilter !== "all" && result.annotationType !== this.typeFilter) return false;
       if (this.tagFilters.size > 0 && !result.tags.some((tag) => this.tagFilters.has(normalizeTagKey(tag)))) {
         return false;
       }
-      if (sourceQuery) {
-        const sourceName = result.fileName.toLowerCase();
-        const sourcePath = result.filePath.toLowerCase();
-        if (!sourceName.includes(sourceQuery) && !sourcePath.includes(sourceQuery)) {
-          return false;
-        }
-      }
-      if (!query) {
-        return true;
-      }
+      if (this.sourceFilters.size > 0 && !this.sourceFilters.has(result.filePath)) return false;
+      if (!query) return true;
       return (
         result.selectedTextPreview.toLowerCase().includes(query) ||
         result.notePreview.toLowerCase().includes(query) ||
         result.filePath.toLowerCase().includes(query) ||
         result.fileName.toLowerCase().includes(query) ||
-        result.status.toLowerCase().includes(query) ||
         result.annotationType.toLowerCase().includes(query) ||
         result.tags.some((tag) => tag.toLowerCase().includes(query))
       );
     });
   }
 
-  private toggleAnnotationTypeFilter(type: AnnotationType): void {
-    if (this.annotationTypeFilters.has(type)) {
-      this.annotationTypeFilters.delete(type);
-    } else {
-      this.annotationTypeFilters.add(type);
-    }
-    void this.render();
-  }
-
-  private toggleTagFilter(tag: string): void {
-    const key = normalizeTagKey(tag);
-    if (this.tagFilters.has(key)) {
-      this.tagFilters.delete(key);
-    } else {
-      this.tagFilters.add(key);
-    }
-    void this.render();
-  }
-
   private getAvailableTags(): string[] {
-    return normalizeTags(this.results.flatMap((result) => result.tags)).sort((left, right) =>
-      left.localeCompare(right, undefined, { sensitivity: "base" })
+    return normalizeTags(this.results.flatMap((r) => r.tags)).sort((a, b) =>
+      a.localeCompare(b, undefined, { sensitivity: "base" })
     );
   }
 
   private async copyDraft(results: CrossNoteResult[]): Promise<void> {
+    if (results.length === 0) {
+      new Notice(this.plugin.t("draft.empty"));
+      return;
+    }
     const grouped = new Map<string, SideComment[]>();
     for (const result of results) {
       const document = await this.plugin.store.loadDocument(result.filePath);
       const comment = document.comments.find((item) => item.id === result.commentId);
-      if (!comment) {
-        continue;
-      }
+      if (!comment) continue;
       grouped.set(result.filePath, [...(grouped.get(result.filePath) ?? []), comment]);
     }
-
     await this.plugin.copyAnnotationDraft([...grouped.entries()].map(([filePath, comments]) => ({ filePath, comments })));
+  }
+
+  private getContentEl(): HTMLElement {
+    return this.containerEl.children[1] as HTMLElement;
   }
 }
 
@@ -358,33 +559,57 @@ function flattenRecentPreviews(items: RecentPreviewItem[]): CrossNoteResult[] {
         status: preview.status,
         annotationType: preview.annotationType ?? "excerpt",
         tags: normalizeTags(preview.tags),
-        updatedAt: item.updatedAt
+        commentUpdatedAt: preview.updatedAt || item.updatedAt,
+        fileUpdatedAt: item.updatedAt
       });
     }
   }
   return results;
 }
 
-function createToolbarButton(
-  container: HTMLElement,
-  label: string,
-  tooltip: string,
-  onClick: () => void,
-  active = false
-): HTMLButtonElement {
-  const button = container.createEl("button", {
-    cls: ["side-comments-toolbar-button", active ? "is-active" : ""].filter(Boolean).join(" "),
-    attr: {
-      type: "button",
-      title: tooltip,
-      "aria-label": tooltip
-    }
-  });
-  button.createSpan({ cls: "side-comments-toolbar-button-label", text: label });
-  button.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    onClick();
-  });
-  return button;
+function previewAsSideComment(result: CrossNoteResult): SideComment {
+  return {
+    id: result.commentId,
+    anchor: {
+      startOffset: 0,
+      endOffset: 0,
+      selectedText: result.selectedTextPreview,
+      prefix: "",
+      suffix: ""
+    },
+    mark: { type: result.markType, color: result.color },
+    annotationType: result.annotationType,
+    tags: result.tags,
+    note: {
+      content: result.notePreview,
+      createdAt: result.commentUpdatedAt,
+      updatedAt: result.commentUpdatedAt
+    },
+    status: result.status
+  };
+}
+
+function draftFromComment(comment: SideComment): CommentDraft {
+  return {
+    noteContent: comment.note.content,
+    markType: comment.mark.type,
+    color: comment.mark.color,
+    status: comment.status === "orphaned" ? "active" : comment.status,
+    annotationType: getAnnotationType(comment),
+    tags: normalizeTags(comment.tags)
+  };
+}
+
+function statusLabelLocal(status: SideCommentStatus, plugin: SideCommentsPlugin): string {
+  if (status === "active") return plugin.t("filter.status.active");
+  if (status === "resolved") return plugin.t("filter.status.resolved");
+  return plugin.t("filter.status.orphaned");
+}
+
+function colorLabelLocal(color: MarkColor, plugin: SideCommentsPlugin): string {
+  if (color === "yellow") return plugin.t("filter.color.yellow");
+  if (color === "blue") return plugin.t("filter.color.blue");
+  if (color === "red") return plugin.t("filter.color.red");
+  if (color === "green") return plugin.t("filter.color.green");
+  return plugin.t("filter.color.purple");
 }

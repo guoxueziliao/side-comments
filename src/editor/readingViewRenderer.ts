@@ -58,7 +58,11 @@ function wrapComment(container: HTMLElement, comment: SideComment, options: Read
   }
 
   const wrapper = document.createElement("span");
-  wrapper.className = [...getMarkClassNames(comment), "side-comments-reading-view-mark"].join(" ");
+  const classNames = [...getMarkClassNames(comment), "side-comments-reading-view-mark"];
+  if (comment.mark.type === "note") {
+    classNames.push("side-comments-reading-view-mark--note");
+  }
+  wrapper.className = classNames.join(" ");
   wrapper.dataset.sideCommentsId = comment.id;
   wrapper.dataset.sideCommentsReadingView = "true";
   wrapper.title = options.commentTitle ?? "";
