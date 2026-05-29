@@ -1,7 +1,7 @@
 {
   "name": "side-comments",
-  "version": "0.7.0",
-  "description": "Non-invasive side comments and reading annotations for Markdown notes.",
+  "version": "0.11.0",
+  "description": "Side comments and visual marks for Markdown notes, stored outside the note body.",
   "main": "main.js",
   "scripts": {
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",

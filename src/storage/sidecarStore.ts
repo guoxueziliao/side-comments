@@ -4,6 +4,8 @@ import { relocateComment } from "../anchor/relocate";
 import {
   type AnchorSourceMode,
   CURRENT_SCHEMA_VERSION,
+  type MarkColor,
+  type MarkType,
   type SideCommentExportDocumentEntry,
   type RecentPreviewItem,
   type CommentCreateInput,
@@ -26,6 +28,13 @@ import {
   hashVaultPath,
   normalizeVaultRelativePath
 } from "./pathHash";
+
+export interface UpsertCommentUpdateFields {
+  markType?: MarkType;
+  color?: MarkColor;
+  noteContent?: string;
+  tags?: string[];
+}
 
 export interface UpsertCommentResult {
   document: SideCommentDocument;
@@ -119,7 +128,7 @@ export class SidecarStore {
     return updated;
   }
 
-  async upsertComment(input: CommentCreateInput): Promise<UpsertCommentResult> {
+  async upsertComment(input: CommentCreateInput, updateFields?: UpsertCommentUpdateFields): Promise<UpsertCommentResult> {
     const normalizedPath = normalizeVaultRelativePath(input.filePath);
     const startOffset = Math.max(0, Math.min(input.startOffset, input.endOffset));
     const endOffset = Math.max(startOffset, Math.max(input.startOffset, input.endOffset));
@@ -135,9 +144,39 @@ export class SidecarStore {
     );
 
     if (existing) {
+      if (!updateFields) {
+        return {
+          document,
+          comment: existing,
+          created: false
+        };
+      }
+
+      const now = new Date().toISOString();
+      const updatedComment: SideComment = {
+        ...existing,
+        mark: {
+          type: updateFields.markType ?? existing.mark.type,
+          color: updateFields.color ?? existing.mark.color
+        },
+        note: {
+          ...existing.note,
+          content: updateFields.noteContent ?? existing.note.content,
+          updatedAt: updateFields.noteContent !== undefined ? now : existing.note.updatedAt
+        },
+        tags: updateFields.tags !== undefined ? normalizeTags(updateFields.tags) : existing.tags
+      };
+
+      const saved = await this.saveDocument({
+        ...document,
+        comments: document.comments.map((comment) =>
+          comment.id === existing.id ? updatedComment : comment
+        )
+      });
+
       return {
-        document,
-        comment: existing,
+        document: saved,
+        comment: updatedComment,
         created: false
       };
     }
@@ -150,7 +189,6 @@ export class SidecarStore {
         type: input.markType,
         color: input.color
       },
-      annotationType: input.annotationType ?? "excerpt",
       tags: [],
       note: {
         content: input.noteContent ?? "",
@@ -188,7 +226,6 @@ export class SidecarStore {
           type: input.markType ?? comment.mark.type,
           color: input.color ?? comment.mark.color
         },
-        annotationType: input.annotationType ?? comment.annotationType,
         tags: input.tags !== undefined ? normalizeTags(input.tags) : comment.tags,
         note: {
           ...comment.note,

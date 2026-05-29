@@ -1,9 +1,9 @@
 {
   "id": "side-comments",
   "name": "Side Comments",
-  "version": "0.7.0",
+  "version": "0.11.0",
   "minAppVersion": "1.5.0",
-  "description": "Non-invasive side comments and reading annotations for Markdown notes.",
+  "description": "Side comments and visual marks for Markdown notes, stored outside the note body.",
   "author": "FAN",
   "isDesktopOnly": true
 }

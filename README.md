@@ -1,106 +1,73 @@
 # Side Comments
 
-Side Comments is a desktop Obsidian plugin for non-invasive side comments and reading annotations in Markdown notes.
+Side comments and visual marks for Markdown notes, stored outside the note body.
 
-It lets you select text in a note, add a highlight, underline, strikethrough, or comment marker, and manage the annotations in a right-side panel. The plugin does not write annotation markup into your Markdown files. Annotation data is stored as local sidecar JSON files inside the vault.
+A desktop Obsidian plugin that lets you select text, add a highlight, underline, strikethrough, or side comment, and manage annotations in a right-side panel — without modifying your Markdown source.
 
 ## Features
 
-- Create annotations from selected Markdown text.
-- Supports highlight, underline, strikethrough, and comment entry points.
-- Works in both source mode and reading mode.
-- Stores annotations outside Markdown under `.obsidian-side-comments/`.
-- Shows visual marks in the editor and reading view.
-- Provides a current-document sidebar for editing, deleting, resolving, searching, and filtering comments.
-- Supports jumping between sidebar cards and annotated source text.
-- Relocates anchors after document edits when confidence is high.
-- Loads only the current document sidecar, suitable for large vaults.
-
-## Data Storage
-
-Side Comments stores annotation data in the current vault:
-
-```text
-.obsidian-side-comments/
-  manifest.json
-  files/
-  cache/
-  backups/
-```
-
-Each Markdown file maps to one sidecar JSON file by hashing its normalized vault-relative path. The Markdown source file is not modified.
+- Create annotations from selected text in source mode or reading mode.
+- Visual marks: highlight, underline, strikethrough.
+- Side comments with note content, tags, and status tracking.
+- Current-document sidebar for editing, filtering, resolving, and jumping to annotations.
+- Cross-note overview for reviewing annotations across the vault.
+- Import, export, and health-check tools for annotation data.
+- Anchor relocation after document edits.
+- English and Simplified Chinese interface.
 
 ## Installation
 
-For manual testing or local use, copy these release files into:
-
-```text
-<vault>/.obsidian/plugins/side-comments/
-```
-
-Required files:
+Install from the Obsidian Community Plugins directory, or copy these files into `<vault>/.obsidian/plugins/side-comments/`:
 
 - `main.js`
 - `manifest.json`
 - `styles.css`
 
-Then enable `Side Comments` from Obsidian Settings -> Community plugins.
+Then enable **Side Comments** from Settings → Community plugins.
 
-## Development
+## Usage
 
-Install dependencies:
+1. Open a Markdown note.
+2. Select text in the editor.
+3. Use the floating toolbar to apply a visual mark or open the advanced creation panel.
+4. Manage annotations in the right-side sidebar.
 
-```bash
-npm install
+## Data Storage
+
+Annotation data is stored as local JSON files under:
+
+```text
+.obsidian-side-comments/
+  files/
+  cache/
+  backups/
 ```
 
-Run type checking:
+Each Markdown file maps to one sidecar JSON file. Your Markdown source files are not modified.
 
-```bash
-npm run typecheck
-```
+All data stays local in your vault. The plugin does not upload, sync, collect, or transmit any notes or annotations.
 
-Build the plugin:
-
-```bash
-npm run build
-```
-
-Watch during development:
-
-```bash
-npm run dev
-```
-
-The project currently targets Node.js 26 in the local WSL development environment.
-
-## Release Checklist
-
-- Update `manifest.json`, `package.json`, and `versions.json` to the same plugin version.
-- Run `npm run typecheck`.
-- Run `npm run build`.
-- Confirm the release folder contains `main.js`, `manifest.json`, and `styles.css`.
-- Test source mode annotation creation.
-- Test reading mode annotation creation.
-- Test sidebar edit, delete, resolve, search, filter, and jump actions.
-- Test file rename behavior with existing annotations.
-
-## Current Limitations
+## Limitations
 
 - Desktop only.
 - Markdown notes only.
 - No PDF or EPUB annotation.
+- No mobile support.
 - No cloud sync or multi-user collaboration.
-- No full-vault annotation search.
-- Reading mode selection is mapped back to Markdown source by text matching, so complex rendered Markdown may still need refinement.
+- Reading-mode source mapping can still have edge cases for complex Markdown.
 
-## Privacy
+## Development Status
 
-Side Comments does not upload, sync, collect, or transmit notes or annotation data. All annotation data remains local in the vault.
+Side Comments is in active `0.x` development. Core annotation workflows are usable. Behavior may continue to improve across `0.x` releases. Users should keep backups before relying on plugin data heavily.
 
-## Compatibility
+## Development
 
-Annotation files include a `schemaVersion`. Newer plugin versions migrate older sidecar files lazily when they are opened. Downgrading to older plugin versions is not guaranteed to read newer schemas correctly.
+```bash
+npm install
+npm run typecheck
+npm run build
+npm run dev        # watch mode
+```
 
 ## License
 

@@ -1,14 +1,14 @@
 import { setIcon } from "obsidian";
 import type { MarkColor, MarkType, SelectionAction } from "../types";
-import type { Translator, TranslationKey } from "../i18n";
+import type { Translator } from "../i18n";
 
 export interface SelectionToolbarAction {
   id: SelectionAction;
   type: MarkType;
   color: MarkColor;
-  titleKey: "toolbar.highlight" | "toolbar.underline" | "toolbar.strikethrough" | "toolbar.note";
-  annotationType?: import("../types").AnnotationType;
+  titleKey: "toolbar.highlight" | "toolbar.underline" | "toolbar.strikethrough" | "toolbar.more";
   initialNote?: string;
+  tags?: string[];
 }
 
 interface MarkTypeSpec {
@@ -22,11 +22,8 @@ interface MarkTypeSpec {
 const MARK_TYPE_SPECS: MarkTypeSpec[] = [
   { id: "highlight",     type: "highlight",     defaultColor: "yellow", titleKey: "toolbar.highlight",     icon: "highlighter" },
   { id: "underline",     type: "underline",     defaultColor: "blue",   titleKey: "toolbar.underline",     icon: "underline" },
-  { id: "strikethrough", type: "strikethrough", defaultColor: "red",    titleKey: "toolbar.strikethrough", icon: "strikethrough" },
-  { id: "note",          type: "note",          defaultColor: "purple", titleKey: "toolbar.note",          icon: "sticky-note" }
+  { id: "strikethrough", type: "strikethrough", defaultColor: "red",    titleKey: "toolbar.strikethrough", icon: "strikethrough" }
 ];
-
-const COLOR_ORDER: MarkColor[] = ["yellow", "blue", "red", "green", "purple"];
 
 export const TOOLBAR_ACTIONS: SelectionToolbarAction[] = MARK_TYPE_SPECS.map((spec) => ({
   id: spec.id,
@@ -38,8 +35,6 @@ export const TOOLBAR_ACTIONS: SelectionToolbarAction[] = MARK_TYPE_SPECS.map((sp
 export class SelectionToolbar {
   private readonly root: HTMLDivElement;
   private readonly lastUsedColor = new Map<MarkType, MarkColor>();
-  private activePicker: HTMLDivElement | null = null;
-  private documentClickHandler: ((event: MouseEvent) => void) | null = null;
 
   constructor(
     private readonly host: HTMLElement,
@@ -70,10 +65,9 @@ export class SelectionToolbar {
   }
 
   private renderMarkButton(spec: MarkTypeSpec): void {
-    const wrapper = this.root.createDiv({ cls: "side-comments-toolbar-mark-wrapper" });
     const title = this.t(spec.titleKey);
 
-    const main = wrapper.createEl("button", {
+    const main = this.root.createEl("button", {
       cls: "side-comments-toolbar-button side-comments-toolbar-button--mark",
       attr: {
         type: "button",
@@ -87,21 +81,6 @@ export class SelectionToolbar {
       event.preventDefault();
       event.stopPropagation();
       this.applyMark(spec, this.resolveColor(spec));
-    });
-
-    const chevron = wrapper.createEl("button", {
-      cls: "side-comments-toolbar-chevron",
-      attr: {
-        type: "button",
-        title: this.t("toolbar.colorPicker"),
-        "aria-label": this.t("toolbar.colorPicker")
-      }
-    });
-    setIcon(chevron, "chevron-down");
-    chevron.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      this.toggleColorPicker(spec, wrapper);
     });
   }
 
@@ -118,7 +97,6 @@ export class SelectionToolbar {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      this.closeColorPicker();
       this.hide();
       this.onOpenAdvancedCreate();
     });
@@ -130,7 +108,6 @@ export class SelectionToolbar {
 
   private applyMark(spec: MarkTypeSpec, color: MarkColor): void {
     this.lastUsedColor.set(spec.type, color);
-    this.closeColorPicker();
     this.onAction({
       id: spec.id,
       type: spec.type,
@@ -138,69 +115,6 @@ export class SelectionToolbar {
       titleKey: spec.titleKey
     });
     this.hide();
-  }
-
-  private toggleColorPicker(spec: MarkTypeSpec, anchor: HTMLDivElement): void {
-    if (this.activePicker && this.activePicker.dataset.markType === spec.type) {
-      this.closeColorPicker();
-      return;
-    }
-
-    this.closeColorPicker();
-
-    const picker = this.root.createDiv({ cls: "side-comments-toolbar-color-picker" });
-    picker.dataset.markType = spec.type;
-    const current = this.resolveColor(spec);
-
-    for (const color of COLOR_ORDER) {
-      const swatch = picker.createEl("button", {
-        cls: [
-          "side-comments-toolbar-color-swatch",
-          `side-comments-toolbar-color-swatch--${color}`,
-          color === current ? "is-current" : ""
-        ].filter(Boolean).join(" "),
-        attr: {
-          type: "button",
-          title: this.t(`filter.color.${color}` as TranslationKey),
-          "aria-label": this.t(`filter.color.${color}` as TranslationKey)
-        }
-      });
-      swatch.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        this.applyMark(spec, color);
-      });
-    }
-
-    const anchorRect = anchor.getBoundingClientRect();
-    const rootRect = this.root.getBoundingClientRect();
-    picker.style.left = `${anchorRect.left - rootRect.left}px`;
-    picker.style.top = `${anchor.offsetHeight + 4}px`;
-
-    this.activePicker = picker;
-
-    this.documentClickHandler = (event: MouseEvent) => {
-      if (!this.activePicker) {
-        return;
-      }
-      const target = event.target as Node | null;
-      if (target && this.root.contains(target)) {
-        return;
-      }
-      this.closeColorPicker();
-    };
-    document.addEventListener("mousedown", this.documentClickHandler, true);
-  }
-
-  private closeColorPicker(): void {
-    if (this.activePicker) {
-      this.activePicker.remove();
-      this.activePicker = null;
-    }
-    if (this.documentClickHandler) {
-      document.removeEventListener("mousedown", this.documentClickHandler, true);
-      this.documentClickHandler = null;
-    }
   }
 
   show(anchor: { left: number; top: number }): void {
@@ -215,12 +129,10 @@ export class SelectionToolbar {
   }
 
   hide(): void {
-    this.closeColorPicker();
     this.root.style.display = "none";
   }
 
   destroy(): void {
-    this.closeColorPicker();
     this.root.remove();
   }
 }

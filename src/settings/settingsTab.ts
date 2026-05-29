@@ -1,6 +1,6 @@
 import { App, Modal, PluginSettingTab, Setting, TFile } from "obsidian";
 import type SideCommentsPlugin from "../../main";
-import type { HealthCheckScope, InterfaceLanguage, MaintenanceExportFormat } from "../types";
+import type { CardDensity, HealthCheckScope, InterfaceLanguage, MaintenanceExportFormat } from "../types";
 import { ImportAnnotationsModal } from "./importModal";
 
 export class SideCommentsSettingTab extends PluginSettingTab {
@@ -14,14 +14,14 @@ export class SideCommentsSettingTab extends PluginSettingTab {
 
     containerEl.createEl("h2", { text: this.plugin.t("app.name") });
 
-    this.renderAppearanceGroup(containerEl);
-    this.renderBehaviorGroup(containerEl);
-    this.renderAdvancedGroup(containerEl);
+    this.renderDisplayGroup(containerEl);
+    this.renderCreationGroup(containerEl);
     this.renderMaintenanceGroup(containerEl);
+    this.renderLanguageGroup(containerEl);
   }
 
-  private renderAppearanceGroup(containerEl: HTMLElement): void {
-    containerEl.createEl("h3", { text: this.plugin.t("settings.group.appearance") });
+  private renderDisplayGroup(containerEl: HTMLElement): void {
+    new Setting(containerEl).setName(this.plugin.t("settings.group.display")).setHeading();
 
     new Setting(containerEl)
       .setName(this.plugin.t("settings.showResolvedMarks.name"))
@@ -34,10 +34,24 @@ export class SideCommentsSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+
+    new Setting(containerEl)
+      .setName(this.plugin.t("settings.defaultDensity.name"))
+      .setDesc(this.plugin.t("settings.defaultDensity.desc"))
+      .addDropdown((dropdown) => {
+        dropdown
+          .addOption("normal", this.plugin.t("settings.defaultDensity.normal"))
+          .addOption("compact", this.plugin.t("settings.defaultDensity.compact"))
+          .setValue(this.plugin.settings.defaultDensity)
+          .onChange(async (value) => {
+            this.plugin.settings.defaultDensity = value as CardDensity;
+            await this.plugin.saveSettings();
+          });
+      });
   }
 
-  private renderBehaviorGroup(containerEl: HTMLElement): void {
-    containerEl.createEl("h3", { text: this.plugin.t("settings.group.behavior") });
+  private renderCreationGroup(containerEl: HTMLElement): void {
+    new Setting(containerEl).setName(this.plugin.t("settings.group.creation")).setHeading();
 
     new Setting(containerEl)
       .setName(this.plugin.t("settings.autoOpen.name"))
@@ -50,27 +64,48 @@ export class SideCommentsSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
-
-    new Setting(containerEl)
-      .setName(this.plugin.t("settings.language.name"))
-      .setDesc(this.plugin.t("settings.language.desc"))
-      .addDropdown((dropdown) => {
-        dropdown
-          .addOption("auto", this.plugin.t("settings.language.auto"))
-          .addOption("zh", this.plugin.t("settings.language.zh"))
-          .addOption("en", this.plugin.t("settings.language.en"))
-          .setValue(this.plugin.settings.language)
-          .onChange(async (value) => {
-            this.plugin.settings.language = value as InterfaceLanguage;
-            this.plugin.refreshTranslator();
-            await this.plugin.saveSettings();
-            this.display();
-          });
-      });
   }
 
-  private renderAdvancedGroup(containerEl: HTMLElement): void {
-    containerEl.createEl("h3", { text: this.plugin.t("settings.group.advanced") });
+  private renderMaintenanceGroup(containerEl: HTMLElement): void {
+    new Setting(containerEl).setName(this.plugin.t("settings.group.maintenance")).setHeading();
+
+    this.renderExportSetting(containerEl, this.plugin.t("export.currentNote"), (format) => {
+      void this.plugin.exportCurrentNoteAnnotations(format);
+    });
+    this.renderExportSetting(containerEl, this.plugin.t("export.selectedNotes"), (format) => {
+      new SelectedNotesExportModal(this.app, this.plugin, format).open();
+    });
+    this.renderExportSetting(containerEl, this.plugin.t("export.allSidecars"), (format) => {
+      void this.plugin.exportAllSidecarMetadata(format);
+    });
+
+    new Setting(containerEl)
+      .setName(this.plugin.t("maintenance.import.title"))
+      .addButton((button) => {
+        button
+          .setButtonText(this.plugin.t("import.chooseFile"))
+          .onClick(() => new ImportAnnotationsModal(this.app, this.plugin).open());
+      });
+
+    new Setting(containerEl)
+      .setName(this.plugin.t("maintenance.health.title"))
+      .addButton((button) => {
+        button
+          .setButtonText(this.plugin.t("maintenance.health.title"))
+          .onClick(() => new HealthScopeModal(this.app, this.plugin).open());
+      });
+
+    new Setting(containerEl)
+      .setName(this.plugin.t("repair.orphaned"))
+      .addButton((button) => {
+        button
+          .setButtonText(this.plugin.t("health.openOrphaned"))
+          .onClick(() => {
+            void this.plugin.runAndOpenHealthCheck("all-sidecars", undefined, "orphaned-anchor");
+          });
+      });
+
+    new Setting(containerEl).setName(this.plugin.t("settings.group.sidebar")).setHeading();
 
     new Setting(containerEl)
       .setName(this.plugin.t("settings.cachedDocuments.name"))
@@ -113,42 +148,23 @@ export class SideCommentsSettingTab extends PluginSettingTab {
       });
   }
 
-  private renderMaintenanceGroup(containerEl: HTMLElement): void {
-    containerEl.createEl("h3", { text: this.plugin.t("settings.group.maintenance") });
-
-    this.renderExportSetting(containerEl, this.plugin.t("export.currentNote"), (format) => {
-      void this.plugin.exportCurrentNoteAnnotations(format);
-    });
-    this.renderExportSetting(containerEl, this.plugin.t("export.selectedNotes"), (format) => {
-      new SelectedNotesExportModal(this.app, this.plugin, format).open();
-    });
-    this.renderExportSetting(containerEl, this.plugin.t("export.allSidecars"), (format) => {
-      void this.plugin.exportAllSidecarMetadata(format);
-    });
+  private renderLanguageGroup(containerEl: HTMLElement): void {
+    new Setting(containerEl).setName(this.plugin.t("settings.group.language")).setHeading();
 
     new Setting(containerEl)
-      .setName(this.plugin.t("maintenance.import.title"))
-      .addButton((button) => {
-        button
-          .setButtonText(this.plugin.t("import.chooseFile"))
-          .onClick(() => new ImportAnnotationsModal(this.app, this.plugin).open());
-      });
-
-    new Setting(containerEl)
-      .setName(this.plugin.t("maintenance.health.title"))
-      .addButton((button) => {
-        button
-          .setButtonText(this.plugin.t("maintenance.health.title"))
-          .onClick(() => new HealthScopeModal(this.app, this.plugin).open());
-      });
-
-    new Setting(containerEl)
-      .setName(this.plugin.t("repair.orphaned"))
-      .addButton((button) => {
-        button
-          .setButtonText(this.plugin.t("health.openOrphaned"))
-          .onClick(() => {
-            void this.plugin.runAndOpenHealthCheck("all-sidecars", undefined, "orphaned-anchor");
+      .setName(this.plugin.t("settings.language.name"))
+      .setDesc(this.plugin.t("settings.language.desc"))
+      .addDropdown((dropdown) => {
+        dropdown
+          .addOption("auto", this.plugin.t("settings.language.auto"))
+          .addOption("zh", this.plugin.t("settings.language.zh"))
+          .addOption("en", this.plugin.t("settings.language.en"))
+          .setValue(this.plugin.settings.language)
+          .onChange(async (value) => {
+            this.plugin.settings.language = value as InterfaceLanguage;
+            this.plugin.refreshTranslator();
+            await this.plugin.saveSettings();
+            this.display();
           });
       });
   }

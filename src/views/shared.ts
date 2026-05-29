@@ -1,4 +1,4 @@
-import { setIcon } from "obsidian";
+import { setIcon, type Menu } from "obsidian";
 
 export function createToolbarButton(
   container: HTMLElement,
@@ -46,6 +46,26 @@ export function createIconButton(
     onClick(event);
   });
   return button;
+}
+
+export function showMenuAtElement(menu: Menu, anchor: HTMLElement): void {
+  const rect = anchor.getBoundingClientRect();
+  menu.showAtPosition({ x: rect.left, y: rect.bottom + 4 });
+}
+
+export function showMenuAtEventTarget(menu: Menu, event: MouseEvent): void {
+  const target = event.currentTarget instanceof HTMLElement
+    ? event.currentTarget
+    : event.target instanceof HTMLElement
+      ? event.target.closest("button")
+      : null;
+
+  if (target instanceof HTMLElement) {
+    showMenuAtElement(menu, target);
+    return;
+  }
+
+  menu.showAtMouseEvent(event);
 }
 
 export interface FilterChipOptions {

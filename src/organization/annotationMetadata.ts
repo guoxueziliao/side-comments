@@ -1,7 +1,4 @@
 import type { AnnotationType, SideComment } from "../types";
-import type { Translator } from "../i18n";
-
-export const ANNOTATION_TYPES: AnnotationType[] = ["excerpt", "question", "thought", "task"];
 
 export function getAnnotationType(comment: SideComment): AnnotationType {
   return isAnnotationType(comment.annotationType) ? comment.annotationType : "excerpt";
@@ -9,19 +6,6 @@ export function getAnnotationType(comment: SideComment): AnnotationType {
 
 export function isAnnotationType(value: unknown): value is AnnotationType {
   return value === "excerpt" || value === "question" || value === "thought" || value === "task";
-}
-
-export function annotationTypeLabel(type: AnnotationType, t: Translator): string {
-  if (type === "question") {
-    return t("annotationType.question");
-  }
-  if (type === "thought") {
-    return t("annotationType.thought");
-  }
-  if (type === "task") {
-    return t("annotationType.task");
-  }
-  return t("annotationType.excerpt");
 }
 
 export function normalizeTagKey(value: string): string {

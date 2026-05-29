@@ -4,6 +4,7 @@ import { DATA_DIR, type PluginSettings } from "../types";
 export const DEFAULT_SETTINGS: PluginSettings = {
   autoOpenSidebarAfterCreate: true,
   showResolvedMarks: true,
+  defaultDensity: "normal",
   language: "auto",
   maxCachedDocuments: 100,
   relocateDebounceMs: 800,

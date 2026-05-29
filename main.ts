@@ -322,6 +322,11 @@ export default class SideCommentsPlugin extends Plugin {
     if (!ctx) {
       return;
     }
+
+    const existing = this.currentDocument?.comments.find(
+      (comment) => comment.anchor.startOffset === ctx.startOffset && comment.anchor.endOffset === ctx.endOffset
+    );
+
     new AdvancedCreationModal(this.app, this, (action) => {
       void this.createAnnotationFromOffsets(
         ctx.filePath,
@@ -331,7 +336,12 @@ export default class SideCommentsPlugin extends Plugin {
         action,
         ctx.sourceMode
       );
-    }).open();
+    }, existing ? {
+      markType: existing.mark.type,
+      color: existing.mark.color,
+      noteContent: existing.note.content,
+      tags: existing.tags
+    } : undefined).open();
   }
 
   private captureCurrentSelectionContext(): {
@@ -490,6 +500,7 @@ export default class SideCommentsPlugin extends Plugin {
     }
 
     if (view.getMode() === "source") {
+      view.editor.focus();
       if (!view.editor.somethingSelected()) {
         new Notice(noSelectionMessage);
         return null;
@@ -579,22 +590,39 @@ export default class SideCommentsPlugin extends Plugin {
         markType: action.type,
         color: action.color,
         sourceMode,
-        annotationType: action.annotationType ?? "excerpt",
         noteContent: action.initialNote
+      }, {
+        markType: action.type,
+        color: action.color,
+        noteContent: action.initialNote,
+        tags: action.tags
       });
 
       this.currentDocument = result.document;
       this.currentDocumentLoadState = "ready";
       this.refreshAllViews();
 
-      const forceEdit = action.type === "note";
+      const forceEdit = Boolean(action.initialNote);
       if (this.settings.autoOpenSidebarAfterCreate || !result.created || forceEdit) {
         await this.focusCommentInSidebar(result.comment.id, true);
+      }
+
+      if (!this.isCommentVisibleInSidebar(result.comment.id)) {
+        new Notice(this.t("notice.commentHiddenByFilter"));
       }
     } catch (error) {
       console.error("Side Comments failed to create annotation", error);
       new Notice(this.t("notice.createFailed"));
     }
+  }
+
+  private isCommentVisibleInSidebar(commentId: string): boolean {
+    for (const view of this.getSidebarViews()) {
+      if (view.isCommentIdVisible(commentId)) {
+        return true;
+      }
+    }
+    return true;
   }
 
   async updateComment(commentId: string, input: CommentUpdateInput): Promise<SideCommentDocument> {
@@ -762,6 +790,18 @@ export default class SideCommentsPlugin extends Plugin {
             filePath: entry.filePath,
             title: this.t("health.issue.orphaned"),
             detail: comment.anchor.selectedText || comment.note.content,
+            commentIds: [comment.id]
+          });
+        }
+
+        if (comment.mark.type === "note" && !comment.note.content.trim()) {
+          issues.push({
+            id: `empty:${entry.filePath}:${comment.id}`,
+            type: "structure",
+            severity: "warning",
+            filePath: entry.filePath,
+            title: this.t("health.issue.emptyAnnotation"),
+            detail: comment.anchor.selectedText || "(empty)",
             commentIds: [comment.id]
           });
         }

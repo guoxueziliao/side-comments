@@ -1,24 +1,26 @@
-import { ItemView, Menu, setIcon, WorkspaceLeaf } from "obsidian";
+import { ItemView, Menu, Notice, setIcon, WorkspaceLeaf } from "obsidian";
 import type SideCommentsPlugin from "../../main";
 import { sortComments } from "../storage/migration";
 import type {
-  AnnotationType,
   ColorFilter,
   CommentDraft,
+  CommentUpdateInput,
+  MarkFilter,
+  NoteStateFilter,
   StatusFilter,
   SideComment
 } from "../types";
+import type { CardEditMode, CardDensity } from "./commentCard";
 import { renderCommentCard } from "./commentCard";
 import {
-  ANNOTATION_TYPES,
-  annotationTypeLabel,
   collectAnnotationTags,
-  getAnnotationType,
   hasAnyNormalizedTag,
   normalizeTagKey,
   normalizeTags
 } from "../organization/annotationMetadata";
-import { createToolbarButton } from "./shared";
+import { getAnnotationState, hasNoteContent, matchesNoteStateFilter } from "../organization/annotationState";
+import { createToolbarButton, createFilterChip, createIconButton, openMultiSelectPopup, showMenuAtEventTarget } from "./shared";
+import type { TranslationKey } from "../i18n";
 
 export const SIDE_COMMENTS_VIEW_TYPE = "side-comments-view";
 
@@ -27,15 +29,19 @@ export class SideCommentsSidebarView extends ItemView {
   private readonly drafts = new Map<string, CommentDraft>();
   private focusedCommentId: string | null = null;
   private editingCommentId: string | null = null;
+  private editMode: CardEditMode = null;
   private flashTimer: number | null = null;
   private searchQuery = "";
   private colorFilter: ColorFilter = "all";
   private statusFilter: StatusFilter = "all";
-  private readonly annotationTypeFilters = new Set<AnnotationType>();
+  private markFilter: MarkFilter = "all";
+  private noteStateFilter: NoteStateFilter = "all";
   private readonly tagFilters = new Set<string>();
+  private densityMode: CardDensity;
 
   constructor(leaf: WorkspaceLeaf, private readonly plugin: SideCommentsPlugin) {
     super(leaf);
+    this.densityMode = plugin.settings.defaultDensity ?? "normal";
   }
 
   getViewType(): string {
@@ -76,12 +82,27 @@ export class SideCommentsSidebarView extends ItemView {
     void this.render();
   }
 
-  focusComment(commentId: string, edit = false): void {
+  setMarkFilter(value: MarkFilter): void {
+    this.markFilter = value;
+    void this.render();
+  }
+
+  setNoteStateFilter(value: NoteStateFilter): void {
+    this.noteStateFilter = value;
+    void this.render();
+  }
+
+  focusComment(commentId: string, edit = false, mode: CardEditMode = null): void {
+    const comment = this.findComment(commentId);
+    if (comment && !this.isCommentVisible(comment)) {
+      new Notice(this.plugin.t("notice.commentHiddenByFilter"));
+      return;
+    }
     this.focusedCommentId = commentId;
     this.expandedCommentIds.add(commentId);
-    const comment = this.findComment(commentId);
     if (edit) {
       this.editingCommentId = commentId;
+      this.editMode = mode;
       if (!this.drafts.has(commentId) && comment) {
         this.drafts.set(commentId, draftFromComment(comment));
       }
@@ -91,12 +112,13 @@ export class SideCommentsSidebarView extends ItemView {
     this.flashComment(commentId);
   }
 
-  beginEdit(commentId: string): void {
+  beginEdit(commentId: string, mode: CardEditMode = null): void {
     const comment = this.findComment(commentId);
     if (!comment) {
       return;
     }
     this.editingCommentId = commentId;
+    this.editMode = mode;
     this.expandedCommentIds.add(commentId);
     this.drafts.set(commentId, draftFromComment(comment));
     void this.render();
@@ -106,6 +128,7 @@ export class SideCommentsSidebarView extends ItemView {
   cancelEdit(commentId: string): void {
     if (this.editingCommentId === commentId) {
       this.editingCommentId = null;
+      this.editMode = null;
     }
     this.drafts.delete(commentId);
     void this.render();
@@ -115,31 +138,84 @@ export class SideCommentsSidebarView extends ItemView {
     this.drafts.set(commentId, draft);
   }
 
+  async updateTags(commentId: string, tags: string[]): Promise<void> {
+    const updated = await this.plugin.updateComment(commentId, { tags });
+    this.plugin.setCurrentDocument(updated);
+    this.plugin.refreshAllViews();
+  }
+
   async saveEdit(commentId: string, draft: CommentDraft): Promise<void> {
     const comment = this.findComment(commentId);
     if (!comment) {
       return;
     }
 
-    const updated = await this.plugin.updateComment(commentId, {
-      noteContent: draft.noteContent,
-      markType: draft.markType,
-      color: draft.color,
-      status: draft.status,
-      annotationType: draft.annotationType,
-      tags: draft.tags
-    });
+    const noteContent = draft.noteContent.trim();
+    const state = getAnnotationState(comment);
 
+    if (this.editMode === "note" && !noteContent) {
+      if (state === "note-only") {
+        void this.deleteComment(commentId);
+        return;
+      }
+      if (state === "mark-and-note") {
+        const updated = await this.plugin.updateComment(commentId, { noteContent: "" });
+        this.drafts.delete(commentId);
+        this.editingCommentId = null;
+        this.editMode = null;
+        this.plugin.setCurrentDocument(updated);
+        this.plugin.refreshAllViews();
+        if (!this.isCommentIdVisible(commentId)) {
+          new Notice(this.plugin.t("notice.commentHiddenByFilter"));
+        }
+        return;
+      }
+    }
+
+    const input: CommentUpdateInput = {};
+    if (this.editMode === "note") {
+      input.noteContent = draft.noteContent;
+    } else if (this.editMode === "mark") {
+      if (draft.markType === "note") {
+        if (state === "mark-only") {
+          void this.deleteComment(commentId);
+          return;
+        }
+        input.markType = "note";
+      } else {
+        input.markType = draft.markType;
+        input.color = draft.color;
+      }
+    } else {
+      input.noteContent = draft.noteContent;
+      input.markType = draft.markType;
+      input.color = draft.color;
+      input.status = draft.status;
+      input.tags = draft.tags;
+    }
+
+    const updated = await this.plugin.updateComment(commentId, input);
     this.drafts.delete(commentId);
-    this.editingCommentId = null;
+    if (this.editingCommentId === commentId) {
+      this.editingCommentId = null;
+      this.editMode = null;
+    }
     this.plugin.setCurrentDocument(updated);
     this.plugin.refreshAllViews();
+
+    if (!this.isCommentIdVisible(commentId)) {
+      new Notice(this.plugin.t("notice.commentHiddenByFilter"));
+    }
   }
 
   async toggleStatus(commentId: string, nextStatus: SideComment["status"]): Promise<void> {
     const updated = await this.plugin.setCommentStatus(commentId, nextStatus);
     this.plugin.setCurrentDocument(updated);
     this.plugin.refreshAllViews();
+
+    if (!this.isCommentIdVisible(commentId)) {
+      new Notice(this.plugin.t("notice.commentHiddenByFilter"));
+    }
   }
 
   async deleteComment(commentId: string): Promise<void> {
@@ -159,6 +235,11 @@ export class SideCommentsSidebarView extends ItemView {
   }
 
   async jumpToComment(commentId: string): Promise<void> {
+    const comment = this.findComment(commentId);
+    if (comment?.status === "orphaned") {
+      new Notice(this.plugin.t("notice.orphanJumpFailed"));
+      return;
+    }
     await this.plugin.jumpToCommentInEditor(commentId);
     this.focusComment(commentId, false);
   }
@@ -179,7 +260,12 @@ export class SideCommentsSidebarView extends ItemView {
 
     this.plugin.setCurrentDocument(updated);
     this.plugin.refreshAllViews();
-    this.focusComment(commentId, false);
+
+    if (!this.isCommentIdVisible(commentId)) {
+      new Notice(this.plugin.t("notice.commentHiddenByFilter"));
+    } else {
+      this.focusComment(commentId, false);
+    }
   }
 
   async adjustCommentRange(commentId: string): Promise<void> {
@@ -216,9 +302,34 @@ export class SideCommentsSidebarView extends ItemView {
 
     const header = content.createDiv({ cls: "side-comments-header" });
     const titleRow = header.createDiv({ cls: "side-comments-header-title-row" });
-    titleRow.createDiv({ cls: "side-comments-title", text: this.plugin.t("sidebar.title") });
+    const titleGroup = titleRow.createDiv({ cls: "side-comments-title-group" });
+    titleGroup.createDiv({ cls: "side-comments-title", text: this.plugin.t("sidebar.title") });
+
+    const { document: doc, state: docState } = this.getDocumentState();
+    const countSpan = titleGroup.createSpan({ cls: "side-comments-count" });
 
     const titleActions = titleRow.createDiv({ cls: "side-comments-header-actions" });
+
+    const densityBtn = titleActions.createEl("button", {
+      cls: "side-comments-header-icon-btn",
+      attr: {
+        type: "button",
+        title: this.densityMode === "normal"
+          ? this.plugin.t("sidebar.toolbar.densityCompact")
+          : this.plugin.t("sidebar.toolbar.densityNormal"),
+        "aria-label": this.densityMode === "normal"
+          ? this.plugin.t("sidebar.toolbar.densityCompact")
+          : this.plugin.t("sidebar.toolbar.densityNormal")
+      }
+    });
+    setIcon(densityBtn, this.densityMode === "normal" ? "minimize-2" : "maximize-2");
+    densityBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.densityMode = this.densityMode === "normal" ? "compact" : "normal";
+      void this.render();
+    });
+
     const marksToggle = titleActions.createEl("button", {
       cls: "side-comments-header-icon-btn",
       attr: {
@@ -249,16 +360,133 @@ export class SideCommentsSidebarView extends ItemView {
       this.openHeaderMenu(event);
     });
 
-    const exportRow = header.createDiv({ cls: "side-comments-toolbar-row side-comments-toolbar-row--export" });
-    createToolbarButton(exportRow, this.plugin.t("export.format.json"), this.plugin.t("export.currentNote"), () => {
-      void this.plugin.exportCurrentNoteAnnotations("json");
+    const filterRow = header.createDiv({ cls: "side-comments-filter-chip-row" });
+
+    createFilterChip(filterRow, {
+      label: this.plugin.t("filter.status.label"),
+      valueLabel: this.statusFilter === "all" ? undefined : this.plugin.t(`filter.status.${this.statusFilter}` as TranslationKey),
+      active: this.statusFilter !== "all",
+      onClick: (event) => {
+        const menu = new Menu();
+        for (const [value, labelKey] of [
+          ["all", "filter.status.all"],
+          ["active", "filter.status.active"],
+          ["resolved", "filter.status.resolved"],
+          ["orphaned", "filter.status.orphaned"]
+        ] as const) {
+          menu.addItem((item) => {
+            item.setTitle(this.plugin.t(labelKey))
+              .setChecked(this.statusFilter === value)
+              .onClick(() => this.setStatusFilter(value));
+          });
+        }
+        showMenuAtEventTarget(menu, event);
+      }
     });
-    createToolbarButton(exportRow, this.plugin.t("export.format.markdown"), this.plugin.t("export.currentNote"), () => {
-      void this.plugin.exportCurrentNoteAnnotations("markdown");
+
+    createFilterChip(filterRow, {
+      label: this.plugin.t("filter.type.label"),
+      valueLabel: this.markFilter === "all" ? undefined : this.plugin.t(`filter.type.${this.markFilter}` as TranslationKey),
+      active: this.markFilter !== "all",
+      onClick: (event) => {
+        const menu = new Menu();
+        for (const [value, labelKey] of [
+          ["all", "filter.type.all"],
+          ["highlight", "filter.type.highlight"],
+          ["underline", "filter.type.underline"],
+          ["strikethrough", "filter.type.strikethrough"]
+        ] as const) {
+          menu.addItem((item) => {
+            item.setTitle(this.plugin.t(labelKey))
+              .setChecked(this.markFilter === value)
+              .onClick(() => this.setMarkFilter(value));
+          });
+        }
+        showMenuAtEventTarget(menu, event);
+      }
     });
-    createToolbarButton(exportRow, this.plugin.t("draft.copy"), this.plugin.t("draft.copyTooltip"), () => {
-      void this.copyCurrentDraft();
+
+    createFilterChip(filterRow, {
+      label: this.plugin.t("filter.noteState.label"),
+      valueLabel: this.noteStateFilter === "all" ? undefined : this.plugin.t(`filter.noteState.${this.noteStateFilter.replace("-", "")}` as TranslationKey),
+      active: this.noteStateFilter !== "all",
+      onClick: (event) => {
+        const menu = new Menu();
+        for (const [value, labelKey] of [
+          ["all", "filter.noteState.all"],
+          ["has-note", "filter.noteState.hasNote"],
+          ["no-note", "filter.noteState.noNote"]
+        ] as const) {
+          menu.addItem((item) => {
+            item.setTitle(this.plugin.t(labelKey))
+              .setChecked(this.noteStateFilter === value)
+              .onClick(() => this.setNoteStateFilter(value));
+          });
+        }
+        showMenuAtEventTarget(menu, event);
+      }
     });
+
+    createFilterChip(filterRow, {
+      label: this.plugin.t("filter.color.label"),
+      valueLabel: this.colorFilter === "all" ? undefined : this.plugin.t(`filter.color.${this.colorFilter}` as TranslationKey),
+      active: this.colorFilter !== "all",
+      onClick: (event) => {
+        const menu = new Menu();
+        for (const [value, labelKey] of [
+          ["all", "filter.color.all"],
+          ["yellow", "filter.color.yellow"],
+          ["blue", "filter.color.blue"],
+          ["red", "filter.color.red"],
+          ["green", "filter.color.green"],
+          ["purple", "filter.color.purple"]
+        ] as const) {
+          menu.addItem((item) => {
+            item.setTitle(this.plugin.t(labelKey))
+              .setChecked(this.colorFilter === value)
+              .onClick(() => this.setColorFilter(value));
+          });
+        }
+        showMenuAtEventTarget(menu, event);
+      }
+    });
+
+    if (doc) {
+      const availableTags = collectAnnotationTags(doc.comments);
+      if (availableTags.length > 0) {
+        const tagFilterActive = this.tagFilters.size > 0;
+        createFilterChip(filterRow, {
+          label: this.plugin.t("filter.tag.label"),
+          valueLabel: tagFilterActive ? `${this.tagFilters.size}` : undefined,
+          active: tagFilterActive,
+          onClick: (event) => {
+            const anchor = event.currentTarget instanceof HTMLElement
+              ? event.currentTarget
+              : (event.target as HTMLElement).closest("button") ?? (event.target as HTMLElement);
+            const close = openMultiSelectPopup({
+              anchor,
+              items: availableTags.map((tag) => ({ key: normalizeTagKey(tag), label: tag })),
+              selected: this.tagFilters,
+              searchPlaceholder: this.plugin.t("filter.tag.search"),
+              onChange: (next) => {
+                this.tagFilters.clear();
+                for (const key of next) {
+                  this.tagFilters.add(key);
+                }
+                void this.render();
+              }
+            });
+            void close;
+          }
+        });
+      }
+    }
+
+    if (this.hasActiveFilters()) {
+      createIconButton(filterRow, "x", this.plugin.t("filter.clear"), () => {
+        this.clearFilters();
+      });
+    }
 
     const searchRow = header.createDiv({ cls: "side-comments-toolbar-row" });
     const searchInput = searchRow.createEl("input", {
@@ -272,77 +500,26 @@ export class SideCommentsSidebarView extends ItemView {
       this.setSearchQuery(searchInput.value);
     });
 
-    const colorSelect = searchRow.createEl("select");
-    for (const [value, label] of [
-      ["all", this.plugin.t("filter.color.all")],
-      ["yellow", this.plugin.t("filter.color.yellow")],
-      ["blue", this.plugin.t("filter.color.blue")],
-      ["red", this.plugin.t("filter.color.red")],
-      ["green", this.plugin.t("filter.color.green")],
-      ["purple", this.plugin.t("filter.color.purple")]
-    ] as const) {
-      const option = colorSelect.createEl("option", { text: label });
-      option.value = value;
-    }
-    colorSelect.value = this.colorFilter;
-    colorSelect.addEventListener("change", () => {
-      this.setColorFilter(colorSelect.value as ColorFilter);
-    });
-
-    const statusSelect = searchRow.createEl("select");
-    for (const [value, label] of [
-      ["all", this.plugin.t("filter.status.all")],
-      ["active", this.plugin.t("filter.status.active")],
-      ["resolved", this.plugin.t("filter.status.resolved")],
-      ["orphaned", this.plugin.t("filter.status.orphaned")]
-    ] as const) {
-      const option = statusSelect.createEl("option", { text: label });
-      option.value = value;
-    }
-    statusSelect.value = this.statusFilter;
-    statusSelect.addEventListener("change", () => {
-      this.setStatusFilter(statusSelect.value as StatusFilter);
-    });
-
-    const typeFilterRow = header.createDiv({ cls: "side-comments-filter-chip-row" });
-    typeFilterRow.createSpan({ cls: "side-comments-filter-chip-label", text: this.plugin.t("annotationType.placeholder") });
-    for (const type of ANNOTATION_TYPES) {
-      createToolbarButton(typeFilterRow, annotationTypeLabel(type, this.plugin.t), annotationTypeLabel(type, this.plugin.t), () => {
-        this.toggleAnnotationTypeFilter(type);
-      }, this.annotationTypeFilters.has(type));
-    }
-
-    if (this.hasActiveFilters()) {
-      createToolbarButton(searchRow, this.plugin.t("filter.clear.short"), this.plugin.t("filter.clear"), () => {
-        this.clearFilters();
-      });
-    }
-
-    const { document, state } = this.getDocumentState();
-    if (state === "failed") {
+    if (docState === "failed") {
       header.createDiv({ cls: "side-comments-subtitle", text: this.plugin.t("empty.readFailed") });
       content.createDiv({ cls: "side-comments-empty", text: this.plugin.t("empty.readFailed") });
       return;
     }
 
-    if (!document) {
+    if (!doc) {
       header.createDiv({ cls: "side-comments-subtitle", text: this.plugin.t("sidebar.noCurrentDocument") });
       content.createDiv({ cls: "side-comments-empty", text: this.plugin.t("empty.noMarkdownFile") });
       return;
     }
 
+    const document = doc;
     const availableTags = collectAnnotationTags(document.comments);
-    if (availableTags.length > 0) {
-      const tagFilterRow = header.createDiv({ cls: "side-comments-filter-chip-row" });
-      tagFilterRow.createSpan({ cls: "side-comments-filter-chip-label", text: this.plugin.t("tags.label") });
-      for (const tag of availableTags) {
-        createToolbarButton(tagFilterRow, tag, tag, () => {
-          this.toggleTagFilter(tag);
-        }, this.tagFilters.has(normalizeTagKey(tag)));
-      }
-    }
 
     const filtered = this.getFilteredComments(document.comments);
+    const countText = this.hasActiveFilters()
+      ? `${filtered.length} / ${document.comments.length}`
+      : String(document.comments.length);
+    countSpan.setText(countText);
     header.createDiv({
       cls: "side-comments-subtitle",
       text: this.buildSubtitle(document.comments.length, filtered.length)
@@ -369,8 +546,10 @@ export class SideCommentsSidebarView extends ItemView {
         t: this.plugin.t,
         expanded: this.isCommentExpanded(comment),
         editing: this.editingCommentId === comment.id,
+        editMode: this.editingCommentId === comment.id ? this.editMode : null,
         flash: this.focusedCommentId === comment.id,
         draft: this.drafts.get(comment.id) ?? draftFromComment(comment),
+        density: this.densityMode,
         tagSuggestions: availableTags,
         onToggleExpand: (commentId) => {
           if (this.expandedCommentIds.has(commentId)) {
@@ -380,8 +559,8 @@ export class SideCommentsSidebarView extends ItemView {
           }
           void this.render();
         },
-        onBeginEdit: (commentId) => {
-          this.beginEdit(commentId);
+        onBeginEdit: (commentId, mode) => {
+          this.beginEdit(commentId, mode);
         },
         onCancelEdit: (commentId) => {
           this.cancelEdit(commentId);
@@ -407,6 +586,9 @@ export class SideCommentsSidebarView extends ItemView {
         },
         onDraftChange: (commentId, draft) => {
           this.updateDraft(commentId, draft);
+        },
+        onTagsChange: (commentId, tags) => {
+          void this.updateTags(commentId, tags);
         }
       });
 
@@ -432,7 +614,42 @@ export class SideCommentsSidebarView extends ItemView {
         .setIcon("chevrons-down-up")
         .onClick(() => this.collapseAll());
     });
-    menu.showAtMouseEvent(event);
+    menu.addSeparator();
+    menu.addItem((item) => {
+      item
+        .setTitle(this.plugin.t("export.format.json"))
+        .setIcon("file-json")
+        .onClick(() => void this.plugin.exportCurrentNoteAnnotations("json"));
+    });
+    menu.addItem((item) => {
+      item
+        .setTitle(this.plugin.t("export.format.markdown"))
+        .setIcon("file-text")
+        .onClick(() => void this.plugin.exportCurrentNoteAnnotations("markdown"));
+    });
+    menu.addItem((item) => {
+      item
+        .setTitle(this.plugin.t("draft.copy"))
+        .setIcon("clipboard-copy")
+        .onClick(() => void this.copyCurrentDraft());
+    });
+    menu.addSeparator();
+    menu.addItem((item) => {
+      item
+        .setTitle(this.plugin.t("sidebar.toolbar.refresh"))
+        .setIcon("refresh-cw")
+        .onClick(() => void this.render());
+    });
+    menu.addItem((item) => {
+      item
+        .setTitle(this.plugin.t("sidebar.toolbar.openSettings"))
+        .setIcon("settings")
+        .onClick(() => {
+          (this.plugin as any).app.setting.open();
+          (this.plugin as any).app.setting.openTabById(this.plugin.manifest.id);
+        });
+    });
+    showMenuAtEventTarget(menu, event);
   }
 
   private getContentEl(): HTMLElement {
@@ -459,7 +676,14 @@ export class SideCommentsSidebarView extends ItemView {
       if (this.statusFilter !== "all" && comment.status !== this.statusFilter) {
         return false;
       }
-      if (this.annotationTypeFilters.size > 0 && !this.annotationTypeFilters.has(getAnnotationType(comment))) {
+      if (this.markFilter !== "all") {
+        if (this.markFilter === "comment") {
+          if (!hasNoteContent(comment)) return false;
+        } else if (comment.mark.type !== this.markFilter) {
+          return false;
+        }
+      }
+      if (!matchesNoteStateFilter(comment, this.noteStateFilter)) {
         return false;
       }
       if (!hasAnyNormalizedTag(comment, normalizedTagFilters)) {
@@ -471,12 +695,20 @@ export class SideCommentsSidebarView extends ItemView {
       return (
         comment.anchor.selectedText.toLowerCase().includes(query) ||
         comment.note.content.toLowerCase().includes(query) ||
-        getAnnotationType(comment).toLowerCase().includes(query) ||
         normalizeTags(comment.tags).some((tag) => tag.toLowerCase().includes(query))
       );
     });
 
     return sortComments(matches);
+  }
+
+  private isCommentVisible(comment: SideComment): boolean {
+    return this.getFilteredComments([comment]).length > 0;
+  }
+
+  isCommentIdVisible(commentId: string): boolean {
+    const comment = this.findComment(commentId);
+    return comment ? this.isCommentVisible(comment) : true;
   }
 
   private isCommentExpanded(comment: SideComment): boolean {
@@ -497,7 +729,8 @@ export class SideCommentsSidebarView extends ItemView {
     return Boolean(this.searchQuery.trim()) ||
       this.colorFilter !== "all" ||
       this.statusFilter !== "all" ||
-      this.annotationTypeFilters.size > 0 ||
+      this.markFilter !== "all" ||
+      this.noteStateFilter !== "all" ||
       this.tagFilters.size > 0;
   }
 
@@ -505,27 +738,9 @@ export class SideCommentsSidebarView extends ItemView {
     this.searchQuery = "";
     this.colorFilter = "all";
     this.statusFilter = "all";
-    this.annotationTypeFilters.clear();
+    this.markFilter = "all";
+    this.noteStateFilter = "all";
     this.tagFilters.clear();
-    void this.render();
-  }
-
-  private toggleAnnotationTypeFilter(type: AnnotationType): void {
-    if (this.annotationTypeFilters.has(type)) {
-      this.annotationTypeFilters.delete(type);
-    } else {
-      this.annotationTypeFilters.add(type);
-    }
-    void this.render();
-  }
-
-  private toggleTagFilter(tag: string): void {
-    const key = normalizeTagKey(tag);
-    if (this.tagFilters.has(key)) {
-      this.tagFilters.delete(key);
-    } else {
-      this.tagFilters.add(key);
-    }
     void this.render();
   }
 
@@ -550,7 +765,7 @@ export class SideCommentsSidebarView extends ItemView {
         this.focusedCommentId = null;
         void this.render();
       }
-    }, 1000);
+    }, 1500);
   }
 
   private scrollToComment(commentId: string): void {
@@ -568,7 +783,6 @@ function draftFromComment(comment: SideComment): CommentDraft {
     markType: comment.mark.type,
     color: comment.mark.color,
     status: comment.status === "orphaned" ? "active" : comment.status,
-    annotationType: getAnnotationType(comment),
     tags: normalizeTags(comment.tags)
   };
 }

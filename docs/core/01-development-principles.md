@@ -15,6 +15,13 @@ Status: Confirmed
 - Avoid replacing the editor or building a separate rich text editor.
 - Prefer small, local behavior changes over broad rendering rewrites.
 
+## Platform Boundary
+
+- Design and test the plugin for desktop Obsidian only.
+- Treat mobile, tablet, and other non-desktop-specific experiences as indefinitely deferred.
+- Do not add mobile-specific interaction work to future stages unless the product direction is explicitly reopened.
+- Small-width desktop windows can be considered for robustness, but they are not a mobile support commitment.
+
 ## Performance
 
 - Optimize for large vaults.

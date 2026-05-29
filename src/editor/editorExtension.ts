@@ -44,7 +44,7 @@ function createInlineMarkPlugin(plugin: SideCommentsPlugin): Extension {
 
         const docLength = this.view.state.doc.length;
         const comments = document.comments
-          .filter((comment) => shouldRenderComment(comment, plugin.settings.showResolvedMarks))
+          .filter((comment) => comment.mark.type !== "note" && shouldRenderComment(comment, plugin.settings.showResolvedMarks))
           .sort((left, right) => {
             if (left.anchor.startOffset === right.anchor.startOffset) {
               return visualPriority(left) - visualPriority(right);

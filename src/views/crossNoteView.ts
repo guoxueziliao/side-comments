@@ -1,23 +1,21 @@
 import { ItemView, Menu, Notice, setIcon, WorkspaceLeaf } from "obsidian";
 import type SideCommentsPlugin from "../../main";
 import type {
-  AnnotationType,
   CommentDraft,
   MarkColor,
   MarkType,
+  NoteStateFilter,
   RecentPreviewItem,
   SideComment,
   SideCommentStatus
 } from "../types";
 import { renderCommentCard } from "./commentCard";
 import {
-  ANNOTATION_TYPES,
-  annotationTypeLabel,
-  getAnnotationType,
   normalizeTagKey,
   normalizeTags
 } from "../organization/annotationMetadata";
-import { createFilterChip, createToolbarButton, openMultiSelectPopup } from "./shared";
+import { matchesNoteStateFilter } from "../organization/annotationState";
+import { createFilterChip, createToolbarButton, openMultiSelectPopup, showMenuAtEventTarget } from "./shared";
 
 export const SIDE_COMMENTS_CROSS_NOTE_VIEW_TYPE = "side-comments-cross-note-view";
 
@@ -33,7 +31,6 @@ interface CrossNoteResult {
   markType: MarkType;
   color: MarkColor;
   status: SideCommentStatus;
-  annotationType: AnnotationType;
   tags: string[];
   commentUpdatedAt: string;
   fileUpdatedAt: string;
@@ -45,7 +42,7 @@ export class SideCommentsCrossNoteView extends ItemView {
   private searchQuery = "";
   private statusFilter: SideCommentStatus | "all" = "all";
   private colorFilter: MarkColor | "all" = "all";
-  private typeFilter: AnnotationType | "all" = "all";
+  private noteStateFilter: NoteStateFilter = "all";
   private readonly tagFilters = new Set<string>();
   private readonly sourceFilters = new Set<string>();
   private groupBy: GroupBy = "file";
@@ -175,10 +172,10 @@ export class SideCommentsCrossNoteView extends ItemView {
     });
 
     createFilterChip(row, {
-      label: this.plugin.t("filter.type.label"),
-      valueLabel: this.typeFilter === "all" ? this.plugin.t("filter.type.all") : annotationTypeLabel(this.typeFilter, this.plugin.t),
-      active: this.typeFilter !== "all",
-      onClick: (event) => this.openTypeMenu(event)
+      label: this.plugin.t("filter.noteState.label"),
+      valueLabel: this.noteStateFilter === "all" ? this.plugin.t("filter.noteState.all") : this.plugin.t(`filter.noteState.${this.noteStateFilter === "has-note" ? "hasNote" : "noNote"}`),
+      active: this.noteStateFilter !== "all",
+      onClick: (event) => this.openNoteStateMenu(event)
     });
 
     const tagSummary = this.tagFilters.size === 0
@@ -300,8 +297,10 @@ export class SideCommentsCrossNoteView extends ItemView {
       t: this.plugin.t,
       expanded: this.expandedCards.has(result.commentId),
       editing: false,
+      editMode: null,
       flash: false,
       draft,
+      density: "normal",
       tagSuggestions: [],
       filenamePrefix: { name: result.fileName, fullPath: result.filePath },
       onJump: (commentId) => {
@@ -370,7 +369,7 @@ export class SideCommentsCrossNoteView extends ItemView {
           });
       });
     }
-    menu.showAtMouseEvent(event);
+    showMenuAtEventTarget(menu, event);
   }
 
   private openColorMenu(event: MouseEvent): void {
@@ -393,30 +392,27 @@ export class SideCommentsCrossNoteView extends ItemView {
           });
       });
     }
-    menu.showAtMouseEvent(event);
+    showMenuAtEventTarget(menu, event);
   }
 
-  private openTypeMenu(event: MouseEvent): void {
+  private openNoteStateMenu(event: MouseEvent): void {
     const menu = new Menu();
-    menu.addItem((item) => {
-      item.setTitle(this.plugin.t("filter.type.all"))
-        .setChecked(this.typeFilter === "all")
-        .onClick(() => {
-          this.typeFilter = "all";
-          void this.render();
-        });
-    });
-    for (const type of ANNOTATION_TYPES) {
+    const options: { value: NoteStateFilter; labelKey: "filter.noteState.all" | "filter.noteState.hasNote" | "filter.noteState.noNote" }[] = [
+      { value: "all", labelKey: "filter.noteState.all" },
+      { value: "has-note", labelKey: "filter.noteState.hasNote" },
+      { value: "no-note", labelKey: "filter.noteState.noNote" }
+    ];
+    for (const opt of options) {
       menu.addItem((item) => {
-        item.setTitle(annotationTypeLabel(type, this.plugin.t))
-          .setChecked(this.typeFilter === type)
+        item.setTitle(this.plugin.t(opt.labelKey))
+          .setChecked(this.noteStateFilter === opt.value)
           .onClick(() => {
-            this.typeFilter = type;
+            this.noteStateFilter = opt.value;
             void this.render();
           });
       });
     }
-    menu.showAtMouseEvent(event);
+    showMenuAtEventTarget(menu, event);
   }
 
   private openTagPopup(anchor: HTMLElement): void {
@@ -478,7 +474,7 @@ export class SideCommentsCrossNoteView extends ItemView {
     this.searchQuery = "";
     this.statusFilter = "all";
     this.colorFilter = "all";
-    this.typeFilter = "all";
+    this.noteStateFilter = "all";
     this.tagFilters.clear();
     this.sourceFilters.clear();
     void this.render();
@@ -489,7 +485,7 @@ export class SideCommentsCrossNoteView extends ItemView {
       this.searchQuery.trim() ||
       this.statusFilter !== "all" ||
       this.colorFilter !== "all" ||
-      this.typeFilter !== "all" ||
+      this.noteStateFilter !== "all" ||
       this.tagFilters.size > 0 ||
       this.sourceFilters.size > 0
     );
@@ -500,7 +496,10 @@ export class SideCommentsCrossNoteView extends ItemView {
     return this.results.filter((result) => {
       if (this.statusFilter !== "all" && result.status !== this.statusFilter) return false;
       if (this.colorFilter !== "all" && result.color !== this.colorFilter) return false;
-      if (this.typeFilter !== "all" && result.annotationType !== this.typeFilter) return false;
+      if (this.noteStateFilter !== "all") {
+        const hasNote = result.notePreview.trim().length > 0;
+        if (this.noteStateFilter === "has-note" ? !hasNote : hasNote) return false;
+      }
       if (this.tagFilters.size > 0 && !result.tags.some((tag) => this.tagFilters.has(normalizeTagKey(tag)))) {
         return false;
       }
@@ -511,7 +510,6 @@ export class SideCommentsCrossNoteView extends ItemView {
         result.notePreview.toLowerCase().includes(query) ||
         result.filePath.toLowerCase().includes(query) ||
         result.fileName.toLowerCase().includes(query) ||
-        result.annotationType.toLowerCase().includes(query) ||
         result.tags.some((tag) => tag.toLowerCase().includes(query))
       );
     });
@@ -557,7 +555,6 @@ function flattenRecentPreviews(items: RecentPreviewItem[]): CrossNoteResult[] {
         markType: preview.markType,
         color: preview.color,
         status: preview.status,
-        annotationType: preview.annotationType ?? "excerpt",
         tags: normalizeTags(preview.tags),
         commentUpdatedAt: preview.updatedAt || item.updatedAt,
         fileUpdatedAt: item.updatedAt
@@ -578,7 +575,6 @@ function previewAsSideComment(result: CrossNoteResult): SideComment {
       suffix: ""
     },
     mark: { type: result.markType, color: result.color },
-    annotationType: result.annotationType,
     tags: result.tags,
     note: {
       content: result.notePreview,
@@ -595,7 +591,6 @@ function draftFromComment(comment: SideComment): CommentDraft {
     markType: comment.mark.type,
     color: comment.mark.color,
     status: comment.status === "orphaned" ? "active" : comment.status,
-    annotationType: getAnnotationType(comment),
     tags: normalizeTags(comment.tags)
   };
 }

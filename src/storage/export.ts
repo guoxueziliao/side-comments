@@ -5,7 +5,7 @@ import type {
   SideCommentExportStats,
   SideCommentsExportPackage
 } from "../types";
-import { getAnnotationType, normalizeTags } from "../organization/annotationMetadata";
+import { normalizeTags } from "../organization/annotationMetadata";
 
 const EXPORT_FORMAT = "side-comments-export";
 export const EXPORT_FORMAT_VERSION = 2;
@@ -79,7 +79,6 @@ export function exportPackageToMarkdown(exportPackage: SideCommentsExportPackage
       lines.push("");
       lines.push(`- Status: ${comment.status}`);
       lines.push(`- Mark: ${comment.mark.type}`);
-      lines.push(`- Annotation type: ${getAnnotationType(comment)}`);
       lines.push(`- Color: ${comment.mark.color}`);
       const tags = normalizeTags(comment.tags);
       if (tags.length > 0) {
@@ -108,7 +107,6 @@ export function exportPackageToMarkdown(exportPackage: SideCommentsExportPackage
 function normalizeExportComment(comment: SideComment): SideComment {
   return {
     ...comment,
-    annotationType: getAnnotationType(comment),
     tags: normalizeTags(comment.tags)
   };
 }

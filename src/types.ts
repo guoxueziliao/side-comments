@@ -7,10 +7,11 @@ export type SideCommentStatus = "active" | "resolved" | "orphaned";
 export type MarkFilter = "all" | MarkType | "comment";
 export type ColorFilter = "all" | MarkColor;
 export type StatusFilter = "all" | SideCommentStatus;
-export type SelectionAction = "highlight" | "underline" | "strikethrough" | "note";
+export type NoteStateFilter = "all" | "has-note" | "no-note";
+export type AnnotationState = "mark-only" | "note-only" | "mark-and-note";
+export type SelectionAction = "highlight" | "underline" | "strikethrough";
 export type AnchorSourceMode = "source" | "reading";
 export type AnnotationType = "excerpt" | "question" | "thought" | "task";
-export type AnnotationTypeFilter = "all" | AnnotationType;
 export type InterfaceLanguage = "auto" | "zh" | "en";
 
 export interface TextAnchor {
@@ -71,9 +72,12 @@ export interface SideCommentsManifest {
   updatedAt: string;
 }
 
+export type CardDensity = "normal" | "compact";
+
 export interface PluginSettings {
   autoOpenSidebarAfterCreate: boolean;
   showResolvedMarks: boolean;
+  defaultDensity: CardDensity;
   language: InterfaceLanguage;
   maxCachedDocuments: number;
   relocateDebounceMs: number;
@@ -85,7 +89,6 @@ export interface CommentDraft {
   markType: MarkType;
   color: MarkColor;
   status: SideCommentStatus;
-  annotationType: AnnotationType;
   tags: string[];
 }
 
@@ -97,7 +100,6 @@ export interface CommentCreateInput {
   markType: MarkType;
   color: MarkColor;
   sourceMode: AnchorSourceMode;
-  annotationType?: AnnotationType;
   noteContent?: string;
 }
 
@@ -106,7 +108,6 @@ export interface CommentUpdateInput {
   markType?: MarkType;
   color?: MarkColor;
   status?: SideCommentStatus;
-  annotationType?: AnnotationType;
   tags?: string[];
 }
 
@@ -115,6 +116,7 @@ export interface CommentQuery {
   markFilter: MarkFilter;
   colorFilter: ColorFilter;
   statusFilter: StatusFilter;
+  noteStateFilter: NoteStateFilter;
 }
 
 export interface RecentPreviewItem {

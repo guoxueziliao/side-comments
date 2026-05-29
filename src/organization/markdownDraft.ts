@@ -1,6 +1,7 @@
 import type { MarkColor, SideComment, SideCommentStatus } from "../types";
 import type { Translator } from "../i18n";
-import { annotationTypeLabel, getAnnotationType, normalizeTags } from "./annotationMetadata";
+import { normalizeTags } from "./annotationMetadata";
+import { getAnnotationState } from "./annotationState";
 
 export interface AnnotationDraftGroup {
   filePath: string;
@@ -11,18 +12,18 @@ export function formatAnnotationMarkdownDraft(groups: AnnotationDraftGroup[], t:
   const lines: string[] = [`# ${t("draftOutput.title")}`, ""];
 
   for (const group of groups) {
-    if (group.comments.length === 0) {
+    const noteComments = group.comments.filter((comment) => getAnnotationState(comment) !== "mark-only");
+    if (noteComments.length === 0) {
       continue;
     }
 
     lines.push(`## ${t("draftOutput.source")}: [[${group.filePath}]]`);
     lines.push("");
 
-    group.comments.forEach((comment, index) => {
+    noteComments.forEach((comment, index) => {
       lines.push(`### ${index + 1}. ${inlineOrFallback(comment.anchor.selectedText)}`);
       lines.push("");
       lines.push(`- ${t("draftOutput.status")}: ${statusLabel(comment.status, t)}`);
-      lines.push(`- ${t("draftOutput.type")}: ${annotationTypeLabel(getAnnotationType(comment), t)}`);
       lines.push(`- ${t("draftOutput.tags")}: ${tagsLabel(comment)}`);
       lines.push(`- ${t("draftOutput.color")}: ${colorLabel(comment.mark.color, t)}`);
       lines.push(`- ${t("draftOutput.position")}: ${positionLabel(comment)}`);
